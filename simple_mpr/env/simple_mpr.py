@@ -114,8 +114,9 @@ class RawEnv(SimpleEnv, EzPickle):
             pygame.draw.circle(surface, aoi_color, (x, y), (entity.size + AREA_OF_INFLUENCE) * 350)
             self.screen.blit(surface, (0, 0))
 
+            entity_color = np.array([78, 237, 105]) if entity.state.received else entity.color
             pygame.draw.circle(
-                self.screen, entity.color, (x, y), entity.size * 350
+                self.screen, entity_color, (x, y), entity.size * 350
             )  # 350 is an arbitrary scale factor to get pygame to render similar sizes as pyglet
             pygame.draw.circle(
                 self.screen, (0, 0, 0), (x, y), entity.size * 350, 1
@@ -146,7 +147,7 @@ class RawEnv(SimpleEnv, EzPickle):
                     else:
                         word = []
 
-                message = entity.name + " sends " + word
+                message = entity.name + " sent to " + word
                 message_x_pos = self.width * 0.05
                 message_y_pos = self.height * 0.95 - (self.height * 0.05 * text_line)
                 self.game_font.render_to(
@@ -189,7 +190,6 @@ class RawEnv(SimpleEnv, EzPickle):
             for agent in self.agents:
                 self.terminations[agent] = True
 
-
     # Here actions are called from execute world step
     # set env action for a particular agent
     def _set_action(self, action, agent, action_space, time=None):
@@ -201,6 +201,7 @@ class RawEnv(SimpleEnv, EzPickle):
             action = action[1:]
         # make sure we used all elements of action
         assert len(action) == 0
+
 
 env = make_env(RawEnv)
 parallel_env = parallel_wrapper_fn(env)
@@ -270,7 +271,7 @@ def check_connected(agents):
     def dfs(visited, graph, node):
         if node not in visited:
             visited.add(node)
-            #TODO: use agent attribute instead of calculation
+            # TODO: use agent attribute instead of calculation
             neighbours, _ = calculate_neighbours(node, graph)
             for neighbour in neighbours:
                 if neighbour is not None:
@@ -307,7 +308,7 @@ class Scenario(BaseScenario):
             agent.goal_b = None
         # Agent colors
         for i, agent in enumerate(world.agents):
-            agent.color = np.random.choice(range(255), size=3)
+            agent.color = np.array([237, 200, 78])
             # agent.color = np.array([0.25, 0.25, 0.25])
 
         # Set random initial state

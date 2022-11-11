@@ -29,8 +29,8 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument('--seed', type=int, default=1626)
     parser.add_argument('--eps-test', type=float, default=0.05)
     parser.add_argument('--eps-train', type=float, default=0.1)
-    parser.add_argument('--buffer-size', type=int, default=2000)
-    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--buffer-size', type=int, default=20000)
+    parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument(
         '--gamma', type=float, default=0.9, help='a smaller gamma favors earlier win'
     )
@@ -42,14 +42,14 @@ def get_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument('--n-step', type=int, default=100)
     parser.add_argument('--target-update-freq', type=int, default=320)
-    parser.add_argument('--epoch', type=int, default=100)
-    parser.add_argument('--step-per-epoch', type=int, default=200)
+    parser.add_argument('--epoch', type=int, default=10)
+    parser.add_argument('--step-per-epoch', type=int, default=1000)
     parser.add_argument('--step-per-collect', type=int, default=10)
-    parser.add_argument('--episode-per-collect', type=int, default=16)
-    parser.add_argument('--repeat-per-collect', type=int, default=2)
+    # parser.add_argument('--episode-per-collect', type=int, default=16)
+    parser.add_argument('--repeat-per-collect', type=int, default=10)
     parser.add_argument('--update-per-step', type=float, default=0.1)
-    parser.add_argument('--batch-size', type=int, default=32)
-    parser.add_argument('--hidden-sizes', type=int, nargs='*', default=[64, 64])
+    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--hidden-sizes', type=int, nargs='*', default=[128, 128, 128, 128])
     parser.add_argument('--training-num', type=int, default=10)
     parser.add_argument('--test-num', type=int, default=10)
     parser.add_argument('--logdir', type=str, default='log')
@@ -128,7 +128,10 @@ def get_agents(
 
             agent = DQNPolicy(
                 net,
-                optim
+                optim,
+                args.gamma,
+                args.n_step,
+                target_update_freq=args.target_update_freq
             )
 
             agents.append(agent)
@@ -164,7 +167,7 @@ def train_agent(
         exploration_noise=False  # True
     )
     test_collector = Collector(policy, test_envs)
-    # train_collector.collect(n_step=args.batch_size * args.training_num)
+    train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
     log_path = os.path.join(args.logdir, 'mpr', 'dqn')
     writer = SummaryWriter(log_path)
@@ -196,7 +199,11 @@ def train_agent(
         args.repeat_per_collect,
         args.test_num,
         args.batch_size,
+        train_fn=train_fn,
+        test_fn=test_fn,
         stop_fn=stop_fn,
+        update_per_step=args.update_per_step,
+        test_in_train=False,
         save_best_fn=save_best_fn,
         logger=logger,
         resume_from_log=args.resume
