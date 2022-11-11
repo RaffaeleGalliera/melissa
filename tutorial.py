@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import gym
 import numpy as np
-import pettingzoo.butterfly.pistonball_v6 as pistonball_v6
 import torch
 import torch.nn as nn
 from torch.distributions import Independent, Normal
@@ -43,8 +42,8 @@ def get_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument('--n-step', type=int, default=100)
     parser.add_argument('--target-update-freq', type=int, default=320)
-    parser.add_argument('--epoch', type=int, default=5)
-    parser.add_argument('--step-per-epoch', type=int, default=500)
+    parser.add_argument('--epoch', type=int, default=100)
+    parser.add_argument('--step-per-epoch', type=int, default=200)
     parser.add_argument('--step-per-collect', type=int, default=10)
     parser.add_argument('--episode-per-collect', type=int, default=16)
     parser.add_argument('--repeat-per-collect', type=int, default=2)
@@ -88,14 +87,12 @@ def get_args() -> argparse.Namespace:
     return parser.parse_known_args()[0]
 
 
-# def get_env(args: argparse.Namespace = get_args()):
-#     return PettingZooEnv(pistonball_v6.env(continuous=True, n_pistons=args.n_pistons))
-
 def get_env(render_mode=None):
     env = simple_mpr_v0.env(render_mode=render_mode)
     env = ss.pad_observations_v0(env)
     env = ss.pad_action_space_v0(env)
     return PettingZooEnv(env)
+
 
 def get_agents(
     args: argparse.Namespace = get_args(),
@@ -116,10 +113,10 @@ def get_agents(
         for _ in range(NUMBER_OF_AGENTS):
             # model
             net = Net(
-            args.state_shape,
-            args.action_shape,
-            hidden_sizes=args.hidden_sizes,
-            device=args.device,
+                args.state_shape,
+                args.action_shape,
+                hidden_sizes=args.hidden_sizes,
+                device=args.device,
             ).to(args.device)
 
             optim = torch.optim.Adam(
@@ -169,7 +166,7 @@ def train_agent(
     test_collector = Collector(policy, test_envs)
     # train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
-    log_path = os.path.join(args.logdir, 'pistonball', 'dqn')
+    log_path = os.path.join(args.logdir, 'mpr', 'dqn')
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
     logger = TensorboardLogger(writer)
