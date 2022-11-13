@@ -39,12 +39,11 @@ class MprSelector():
         return self.next()
 
     def next(self):
-        # while True:
-        agents_received = [agent for agent in self.agents if agent.state.received and not agent.state.c]
+        agents_received = [agent for agent in self.agents if sum(agent.state.received_from) and not sum(agent.state.c)]
         self._current_agent = (self._current_agent + 1) % len(self.agents)
 
         temp_index = self._current_agent % len(agents_received)
-        self.selected_agent = self.agent_order[int(agents_received[temp_index].name.split('_')[1])]
+        self.selected_agent = self.agent_order[agents_received[temp_index].id]
 
         return self.selected_agent
 
@@ -114,7 +113,7 @@ class RawEnv(SimpleEnv, EzPickle):
             pygame.draw.circle(surface, aoi_color, (x, y), (entity.size + AREA_OF_INFLUENCE) * 350)
             self.screen.blit(surface, (0, 0))
 
-            entity_color = np.array([78, 237, 105]) if entity.state.received else entity.color
+            entity_color = np.array([78, 237, 105]) if entity.state.received_from else entity.color
             pygame.draw.circle(
                 self.screen, entity_color, (x, y), entity.size * 350
             )  # 350 is an arbitrary scale factor to get pygame to render similar sizes as pyglet
@@ -126,7 +125,7 @@ class RawEnv(SimpleEnv, EzPickle):
             ), f"Coordinates {(x, y)} are out of bounds."
 
             # Draw agent name
-            message = entity.name.split('_')[1]
+            message = entity.id
             self.game_font.render_to(
                 self.screen, (x, y), message, (0, 0, 0)
             )
@@ -165,7 +164,7 @@ class RawEnv(SimpleEnv, EzPickle):
         cur_agent = self.agent_selection
         current_idx = self._index_map[self.agent_selection]
         # next_idx = (current_idx + 1) % len([agent for agent in self.world.agents if agent.state.received and not agent.state.c])
-        last = max([int(agent.name.split('_')[1]) for agent in self.world.agents if agent.state.received and not agent.state.c])
+        last = max([agent.id for agent in self.world.agents if sum(agent.state.received_from) and not sum(agent.state.c)])
         self.agent_selection = self._agent_selector.next()
 
         self.current_actions[current_idx] = action
@@ -187,7 +186,7 @@ class RawEnv(SimpleEnv, EzPickle):
         if self.render_mode == "human":
             self.render()
 
-        n_received = sum([agent.state.received for agent in self.world.agents])
+        n_received = sum([1 for agent in self.world.agents if sum(agent.state.received_from)])
         if n_received == NUMBER_OF_AGENTS:
             logging.debug(f"Every agent has received the message, terminating in {self.steps}, messages transmitted: {self.world.messages_transmitted}")
             for agent in self.agents:
@@ -213,8 +212,8 @@ parallel_env = parallel_wrapper_fn(env)
 class MprAgentState(AgentState):
     def __int__(self):
         super().__init__()
-        self.received = None
-
+        self.received_from = np.zeros(NUMBER_OF_AGENTS)
+        self.id = 0
 
 # Currently not used but might be needed for additional properties
 class MprAgent(Agent):
@@ -259,15 +258,15 @@ class MprWorld(World):
             logging.debug(f"Agent {agent.name} Action: {agent.action.c} with Neigh: {agent.one_hop_neighbours_ids}")
             self.update_agent_state(agent)
             for a in self.agents:
-                logging.debug(f"Agents {a.name} R: {a.state.received}")
+                logging.debug(f"Agents {a.name} R: {a.state.received_from}")
 
     def update_agent_state(self, agent):
-        if agent.action.c and agent.state.received:
+        if agent.action.c and sum(agent.state.received_from):
             logging.debug(f"Agent {agent.name} transmitted")
-            agent.state.c = 1
+            agent.state.c = agent.one_hop_neighbours_ids
             indices = [i for i, x in enumerate(agent.one_hop_neighbours_ids) if x == 1]
             for index in indices:
-                self.agents[index].state.received = 1
+                self.agents[index].state.received_from[agent.id] = 1
         else:
             logging.debug("TRIED")
 
@@ -294,7 +293,7 @@ class Scenario(BaseScenario):
         world = MprWorld()
         # Set world properties
         # Communication dimension which will become also the agent's action
-        world.dim_c = 1
+        world.dim_c = NUMBER_OF_AGENTS
         world.collaborative = True
         # add agents TODO: number i provisional
         world.agents = [MprAgent() for i in range(NUMBER_OF_AGENTS)]
@@ -324,7 +323,8 @@ class Scenario(BaseScenario):
                 agent.state.p_pos = np_random.uniform(-1, +1, world.dim_p)
                 agent.state.p_vel = np.zeros(world.dim_p)
                 agent.state.c = np.zeros(world.dim_c)
-                agent.state.received = 0
+                agent.state.received_from = np.zeros(NUMBER_OF_AGENTS)
+                agent.id = int(agent.name.split('_')[1])
 
             if check_connected(world.agents):
                 logging.debug("Created a connected graph!")
@@ -361,7 +361,7 @@ class Scenario(BaseScenario):
         world.messages_transmitted = 0
         # Randomly select an agent with the message
         random_agent = np_random.choice(world.agents)
-        random_agent.state.received = 1
+        random_agent.state.received_from[random_agent.id] = 1
 
     def benchmark_data(self, agent, world):
         return self.reward(agent, world)
@@ -371,7 +371,7 @@ class Scenario(BaseScenario):
         for other_agent in world.agents:
             if other_agent is agent:
                 continue
-            if other_agent.state.received == 1:
+            if sum(other_agent.state.received_from):
                 accumulated += 1
         completion = accumulated/len(world.agents) if accumulated > 0 else 0
         logging.debug(f"Agent {agent.name} received : { - 1 + completion}")
@@ -386,17 +386,10 @@ class Scenario(BaseScenario):
             comm.append(other.state.c)
 
         # communication status, received and message transmitted flag
-        r = agent.state.received if agent.state.received is not None else 0
-        t = agent.state.c if agent.state.c is not None else 0
+        received = agent.state.received_from
+        transmitted_to = agent.state.c
 
-        transmitted = np.zeros(NUMBER_OF_AGENTS,)
-        received = np.zeros(NUMBER_OF_AGENTS,)
-
-        # TODO: see if there is a better way to do this also we might want an history
-        transmitted.put(0, t)
-        received.put(0, r)
-
-        return np.concatenate([agent.one_hop_neighbours_ids] + [agent.two_hop_neighbours_ids] + [transmitted] + [received])
+        return np.concatenate([agent.one_hop_neighbours_ids] + [agent.two_hop_neighbours_ids] + [transmitted_to] + [received])
 
 
 def calculate_neighbours(agent, possible_neighbours):
