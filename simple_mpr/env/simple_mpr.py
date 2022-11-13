@@ -169,6 +169,9 @@ class RawEnv(SimpleEnv, EzPickle):
         self.agent_selection = self._agent_selector.next()
 
         self.current_actions[current_idx] = action
+        if action:
+            self.world.messages_transmitted += 1
+
         if int(self.agent_selection.split('_')[1]) == last:
             self._execute_world_step()
             self.steps += 1
@@ -186,7 +189,7 @@ class RawEnv(SimpleEnv, EzPickle):
 
         n_received = sum([agent.state.received for agent in self.world.agents])
         if n_received == NUMBER_OF_AGENTS:
-            logging.debug(f"Every agent has received the message, terminating in {self.steps}")
+            logging.debug(f"Every agent has received the message, terminating in {self.steps}, messages transmitted: {self.world.messages_transmitted}")
             for agent in self.agents:
                 self.terminations[agent] = True
 
@@ -237,16 +240,21 @@ class MprAgent(Agent):
         self.action_callback = None
         self.one_hop_neighbours_ids = None
         self.two_hop_neighbours_ids = None
+        self.one_hop_neighbours_neighbours_ids = None
 
 
 class MprWorld(World):
     # update state of the world
+    def __init__(self):
+        super(MprWorld, self).__init__()
+        self.messages_transmitted = 0
+
     def step(self):
         # set actions for scripted agents
         for agent in self.scripted_agents:
             agent.action = agent.action_callback(agent, self)
-        # update agent state
 
+        # update agent state
         for agent in self.agents:
             logging.debug(f"Agent {agent.name} Action: {agent.action.c} with Neigh: {agent.one_hop_neighbours_ids}")
             self.update_agent_state(agent)
@@ -257,7 +265,6 @@ class MprWorld(World):
         if agent.action.c and agent.state.received:
             logging.debug(f"Agent {agent.name} transmitted")
             agent.state.c = 1
-            agent.state.fired = 1
             indices = [i for i, x in enumerate(agent.one_hop_neighbours_ids) if x == 1]
             for index in indices:
                 self.agents[index].state.received = 1
@@ -323,6 +330,35 @@ class Scenario(BaseScenario):
                 logging.debug("Created a connected graph!")
                 break
 
+        # As it's static for every agent calculate its one and two hop neighbours
+        for agent in world.agents:
+            one_hop_neighbours, one_hop_neighbours_ids = calculate_neighbours(agent, world.agents)
+            assert len(one_hop_neighbours_ids) == NUMBER_OF_AGENTS
+
+            two_hop_neighbours = []
+            two_hop_neighbours_ids = []
+            for possible_neighbour in world.agents:
+                if possible_neighbour in one_hop_neighbours:
+                    neighbour_neighbours, neighbour_neighbours_names = calculate_neighbours(possible_neighbour, world.agents)
+                    two_hop_neighbours.append(neighbour_neighbours)
+                    two_hop_neighbours_ids.append(neighbour_neighbours_names)
+                elif possible_neighbour is not agent:
+                    two_hop_neighbours_ids.append([0] * NUMBER_OF_AGENTS)
+
+            assert np.array(two_hop_neighbours_ids).shape == (NUMBER_OF_AGENTS, NUMBER_OF_AGENTS)
+
+            final_two_hop = np.zeros((NUMBER_OF_AGENTS,))
+            for sublist in two_hop_neighbours_ids:
+                temp = []
+                for x, y in zip(final_two_hop, sublist):
+                    temp.append(x or y)
+                final_two_hop = temp
+
+            agent.one_hop_neighbours_ids = one_hop_neighbours_ids
+            agent.two_hop_neighbours_ids = final_two_hop
+
+        # Reset messages counter
+        world.messages_transmitted = 0
         # Randomly select an agent with the message
         random_agent = np_random.choice(world.agents)
         random_agent.state.received = 1
@@ -339,32 +375,9 @@ class Scenario(BaseScenario):
                 accumulated += 1
         completion = accumulated/len(world.agents) if accumulated > 0 else 0
         logging.debug(f"Agent {agent.name} received : { - 1 + completion}")
-        return - 1 + completion
+        return (- 1 + completion) * world.messages_transmitted
 
     def observation(self, agent, world):
-        # Move neighbours as an agent property so we can query it easily
-        one_hop_neighbours, one_hop_neighbours_ids = calculate_neighbours(agent, world.agents)
-        assert len(one_hop_neighbours_ids) == NUMBER_OF_AGENTS
-
-        two_hop_neighbours = []
-        two_hop_neighbours_ids = []
-        for possible_neighbour in world.agents:
-            if possible_neighbour in one_hop_neighbours:
-                neighbour_neighbours, neighbour_neighbours_names = calculate_neighbours(possible_neighbour, world.agents)
-                two_hop_neighbours.append(neighbour_neighbours)
-                two_hop_neighbours_ids.append(neighbour_neighbours_names)
-            elif possible_neighbour is not agent:
-                two_hop_neighbours_ids.append([0] * NUMBER_OF_AGENTS)
-
-        assert np.array(two_hop_neighbours_ids).shape == (NUMBER_OF_AGENTS, NUMBER_OF_AGENTS)
-
-        final_two_hop = np.zeros((NUMBER_OF_AGENTS,))
-        for sublist in two_hop_neighbours_ids:
-            temp = []
-            for x, y in zip(final_two_hop, sublist):
-                temp.append(x or y)
-            final_two_hop = temp
-
         # communication of all other agents
         comm = []
         for other in world.agents:
@@ -375,9 +388,6 @@ class Scenario(BaseScenario):
         # communication status, received and message transmitted flag
         r = agent.state.received if agent.state.received is not None else 0
         t = agent.state.c if agent.state.c is not None else 0
-
-        agent.one_hop_neighbours_ids = one_hop_neighbours_ids
-        agent.two_hop_neighbours_ids = final_two_hop
 
         transmitted = np.zeros(NUMBER_OF_AGENTS,)
         received = np.zeros(NUMBER_OF_AGENTS,)
