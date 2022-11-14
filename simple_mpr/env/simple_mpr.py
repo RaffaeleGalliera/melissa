@@ -108,12 +108,12 @@ class RawEnv(SimpleEnv, EzPickle):
             y += self.height // 2
 
             # Draw AoI
-            aoi_color = (0, 255, 0, 128) if entity.state.c else (255, 0, 0, 128)
+            aoi_color = (0, 255, 0, 128) if sum(entity.state.c) else (255, 0, 0, 128)
             surface = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
             pygame.draw.circle(surface, aoi_color, (x, y), (entity.size + AREA_OF_INFLUENCE) * 350)
             self.screen.blit(surface, (0, 0))
 
-            entity_color = np.array([78, 237, 105]) if entity.state.received_from else entity.color
+            entity_color = np.array([78, 237, 105]) if sum(entity.state.received_from) else entity.color
             pygame.draw.circle(
                 self.screen, entity_color, (x, y), entity.size * 350
             )  # 350 is an arbitrary scale factor to get pygame to render similar sizes as pyglet
@@ -125,7 +125,7 @@ class RawEnv(SimpleEnv, EzPickle):
             ), f"Coordinates {(x, y)} are out of bounds."
 
             # Draw agent name
-            message = entity.id
+            message = str(entity.id)
             self.game_font.render_to(
                 self.screen, (x, y), message, (0, 0, 0)
             )
@@ -140,7 +140,7 @@ class RawEnv(SimpleEnv, EzPickle):
                         "[" + ",".join([f"{comm:.2f}" for comm in entity.state.c]) + "]"
                     )
                 else:
-                    if entity.state.c == 1:
+                    if sum(entity.state.c):
                         indices = [i for i, x in enumerate(entity.one_hop_neighbours_ids) if x == 1]
                         word = str(indices)
                     else:
@@ -389,7 +389,9 @@ class Scenario(BaseScenario):
         received = agent.state.received_from
         transmitted_to = agent.state.c
 
-        return np.concatenate([agent.one_hop_neighbours_ids] + [agent.two_hop_neighbours_ids] + [transmitted_to] + [received])
+        agent_observation = np.concatenate([agent.one_hop_neighbours_ids] + [agent.two_hop_neighbours_ids] + [transmitted_to] + [received])
+
+        return agent_observation
 
 
 def calculate_neighbours(agent, possible_neighbours):
