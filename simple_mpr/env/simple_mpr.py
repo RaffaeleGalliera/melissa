@@ -1,16 +1,19 @@
 import numpy as np
 import logging
-
+import itertools
 from gymnasium.utils import EzPickle
 
 from pettingzoo.utils.conversions import parallel_wrapper_fn
 
-from pettingzoo.mpe._mpe_utils.core import Agent, Landmark, World, AgentState, Action
 from pettingzoo.mpe._mpe_utils.scenario import BaseScenario
-from pettingzoo.mpe._mpe_utils.simple_env import SimpleEnv, make_env
+from pettingzoo.mpe._mpe_utils.simple_env import SimpleEnv
+import pettingzoo.utils.wrappers as wrappers
+
+from simple_mpr.env.utils.wrappers.multi_discrete_to_discrete import MultiDiscreteToDiscreteWrapper
 
 import pygame
 from .utils.constants import AREA_OF_INFLUENCE, NUMBER_OF_AGENTS
+from .utils.core import MprAgent, MprWorld
 from gymnasium import spaces
 
 from pettingzoo.utils import agent_selector
@@ -19,57 +22,12 @@ logging.basicConfig()
 logging.getLogger().setLevel(logging.INFO)
 
 
-class MprSelector():
-    """Outputs an agent in the given order whenever agent_select is called.
-
-    Can reinitialize to a new order
-    """
-
-    def __init__(self, agent_order, agents):
-        self.reinit(agent_order, agents)
-
-    def reinit(self, agent_order, agents):
-        self.agent_order = agent_order
-        self.agents = agents
-        self._current_agent = 0
-        self.selected_agent = 0
-
-    def reset(self):
-        self.reinit(self.agent_order, self.agents)
-        return self.next()
-
-    def next(self):
-        agents_received = [agent for agent in self.agents if sum(agent.state.received_from) and not sum(agent.state.c)]
-        self._current_agent = (self._current_agent + 1) % len(self.agents)
-
-        temp_index = self._current_agent % len(agents_received)
-        self.selected_agent = self.agent_order[agents_received[temp_index].id]
-
-        return self.selected_agent
-
-    def is_last(self):
-        """Does not work as expected if you change the order."""
-        return self.selected_agent == self.agent_order[-1]
-
-    def is_first(self):
-        return self.selected_agent == self.agent_order[0]
-
-    def __eq__(self, other):
-        if not isinstance(other, agent_selector):
-            return NotImplemented
-
-        return (
-            self.agent_order == other.agent_order
-            and self._current_agent == other._current_agent
-            and self.selected_agent == other.selected_agent
-        )
-
-
 class RawEnv(SimpleEnv, EzPickle):
     def __init__(self, max_cycles=50, continuous_actions=False, render_mode=None):
         EzPickle.__init__(self, max_cycles, continuous_actions, render_mode)
         scenario = Scenario()
         world = scenario.make_world()
+
         super().__init__(
             scenario=scenario,
             world=world,
@@ -79,10 +37,28 @@ class RawEnv(SimpleEnv, EzPickle):
         )
         self.metadata["name"] = "simple_mpr"
 
-        self._agent_selector = MprSelector(self.agents, self.world.agents)
+        # self._agent_selector = MprSelector(self.agents, self.world.agents)
+        self._agent_selector = agent_selector(self.agents)
 
+        actions_dim = np.zeros(NUMBER_OF_AGENTS)
+        actions_dim.fill(2)
+
+        state_dim = 0
         for agent in world.agents:
-            self.action_spaces[agent.name] = spaces.Discrete(2)
+            self.action_spaces[agent.name] = spaces.MultiDiscrete(actions_dim)
+            obs_dim = len(self.scenario.observation(agent, self.world)['observation'])
+            state_dim += obs_dim
+            self.observation_spaces[agent.name] = {
+                'observation': spaces.Box(low=1, high=1, shape=(obs_dim,), dtype=np.int8),
+                'action_mask': spaces.Box(low=0, high=1, shape=(NUMBER_OF_AGENTS,), dtype=np.int8)
+            }
+
+        self.state_space = spaces.Box(
+            low=0,
+            high=1,
+            shape=(state_dim,),
+            dtype=np.int8
+        )
 
     def draw(self):
         # clear screen
@@ -108,12 +84,12 @@ class RawEnv(SimpleEnv, EzPickle):
             y += self.height // 2
 
             # Draw AoI
-            aoi_color = (0, 255, 0, 128) if sum(entity.state.c) else (255, 0, 0, 128)
+            aoi_color = (0, 255, 0, 128) if sum(entity.state.transmitted_to) else (255, 0, 0, 128)
             surface = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
             pygame.draw.circle(surface, aoi_color, (x, y), (entity.size + AREA_OF_INFLUENCE) * 350)
             self.screen.blit(surface, (0, 0))
 
-            entity_color = np.array([78, 237, 105]) if sum(entity.state.received_from) else entity.color
+            entity_color = np.array([78, 237, 105]) if sum(entity.state.received_from) or entity.state.message_origin else entity.color
             pygame.draw.circle(
                 self.screen, entity_color, (x, y), entity.size * 350
             )  # 350 is an arbitrary scale factor to get pygame to render similar sizes as pyglet
@@ -133,20 +109,17 @@ class RawEnv(SimpleEnv, EzPickle):
             if isinstance(entity, MprAgent):
                 if entity.silent:
                     continue
-                if np.all(entity.state.c == 0):
+                if np.all(entity.state.relayed_by == 0):
                     word = "_"
                 elif self.continuous_actions:
                     word = (
                         "[" + ",".join([f"{comm:.2f}" for comm in entity.state.c]) + "]"
                     )
                 else:
-                    if sum(entity.state.c):
-                        indices = [i for i, x in enumerate(entity.one_hop_neighbours_ids) if x == 1]
-                        word = str(indices)
-                    else:
-                        word = []
+                    indices = [i for i, x in enumerate(entity.state.relayed_by) if x == 1]
+                    word = str(indices)
 
-                message = entity.name + " sent to " + word
+                message = entity.name + " chosen MPR " + word
                 message_x_pos = self.width * 0.05
                 message_y_pos = self.height * 0.95 - (self.height * 0.05 * text_line)
                 self.game_font.render_to(
@@ -154,24 +127,26 @@ class RawEnv(SimpleEnv, EzPickle):
                 )
                 text_line += 1
 
+    def observe(self, agent):
+        return self.scenario.observation(
+            self.world.agents[self._index_map[agent]], self.world
+        )
+
     def step(self, action):
         if (
-            self.terminations[self.agent_selection]
-            or self.truncations[self.agent_selection]
+                self.terminations[self.agent_selection]
+                or self.truncations[self.agent_selection]
         ):
             self._was_dead_step(action)
             return
         cur_agent = self.agent_selection
         current_idx = self._index_map[self.agent_selection]
-        # next_idx = (current_idx + 1) % len([agent for agent in self.world.agents if agent.state.received and not agent.state.c])
-        last = max([agent.id for agent in self.world.agents if sum(agent.state.received_from) and not sum(agent.state.c)])
+        next_idx = (current_idx + 1) % self.num_agents
         self.agent_selection = self._agent_selector.next()
 
         self.current_actions[current_idx] = action
-        if action:
-            self.world.messages_transmitted += 1
 
-        if int(self.agent_selection.split('_')[1]) == last:
+        if next_idx == 0:
             self._execute_world_step()
             self.steps += 1
             if self.steps >= self.max_cycles:
@@ -186,7 +161,7 @@ class RawEnv(SimpleEnv, EzPickle):
         if self.render_mode == "human":
             self.render()
 
-        n_received = sum([1 for agent in self.world.agents if sum(agent.state.received_from)])
+        n_received = sum([1 for agent in self.world.agents if sum(agent.state.received_from) or agent.state.message_origin])
         if n_received == NUMBER_OF_AGENTS:
             logging.debug(f"Every agent has received the message, terminating in {self.steps}, messages transmitted: {self.world.messages_transmitted}")
             for agent in self.agents:
@@ -203,89 +178,6 @@ class RawEnv(SimpleEnv, EzPickle):
             action = action[1:]
         # make sure we used all elements of action
         assert len(action) == 0
-
-
-env = make_env(RawEnv)
-parallel_env = parallel_wrapper_fn(env)
-
-
-class MprAgentState(AgentState):
-    def __int__(self):
-        super().__init__()
-        self.received_from = np.zeros(NUMBER_OF_AGENTS)
-        self.id = 0
-
-# Currently not used but might be needed for additional properties
-class MprAgent(Agent):
-    def __init__(self):
-        super().__init__()
-        # agents are movable by default
-        self.movable = True
-        # cannot send communication signals
-        self.silent = False
-        # cannot observe the world
-        self.blind = False
-        # physical motor noise amount
-        self.u_noise = None
-        # communication noise amount
-        self.c_noise = None
-        # control range
-        self.u_range = 1.0
-        # state
-        self.state = MprAgentState()
-        # action
-        self.action = Action()
-        # script behavior to execute
-        self.action_callback = None
-        self.one_hop_neighbours_ids = None
-        self.two_hop_neighbours_ids = None
-        self.one_hop_neighbours_neighbours_ids = None
-
-
-class MprWorld(World):
-    # update state of the world
-    def __init__(self):
-        super(MprWorld, self).__init__()
-        self.messages_transmitted = 0
-
-    def step(self):
-        # set actions for scripted agents
-        for agent in self.scripted_agents:
-            agent.action = agent.action_callback(agent, self)
-
-        # update agent state
-        for agent in self.agents:
-            logging.debug(f"Agent {agent.name} Action: {agent.action.c} with Neigh: {agent.one_hop_neighbours_ids}")
-            self.update_agent_state(agent)
-            for a in self.agents:
-                logging.debug(f"Agents {a.name} R: {a.state.received_from}")
-
-    def update_agent_state(self, agent):
-        if agent.action.c and sum(agent.state.received_from):
-            logging.debug(f"Agent {agent.name} transmitted")
-            agent.state.c = agent.one_hop_neighbours_ids
-            indices = [i for i, x in enumerate(agent.one_hop_neighbours_ids) if x == 1]
-            for index in indices:
-                self.agents[index].state.received_from[agent.id] = 1
-        else:
-            logging.debug("TRIED")
-
-
-def check_connected(agents):
-    visited = set()  # Set to keep track of visited nodes of graph.
-
-    def dfs(visited, graph, node):
-        if node not in visited:
-            visited.add(node)
-            # TODO: use agent attribute instead of calculation
-            neighbours, _ = calculate_neighbours(node, graph)
-            for neighbour in neighbours:
-                if neighbour is not None:
-                    dfs(visited, graph, neighbour)
-
-    dfs(visited, agents, agents[0])
-
-    return True if len(visited) == len(agents) else False
 
 
 class Scenario(BaseScenario):
@@ -324,11 +216,21 @@ class Scenario(BaseScenario):
                 agent.state.p_vel = np.zeros(world.dim_p)
                 agent.state.c = np.zeros(world.dim_c)
                 agent.state.received_from = np.zeros(NUMBER_OF_AGENTS)
+                agent.state.transmitted_to = np.zeros(NUMBER_OF_AGENTS)
+                agent.state.relays_for = np.zeros(NUMBER_OF_AGENTS)
+                agent.state.relayed_by = np.zeros(NUMBER_OF_AGENTS)
+                agent.state.message_origin = 0
+                agent.one_hop_neighbours_ids = None
+                agent.two_hop_neighbours_ids = None
+                agent.one_hop_neighbours_neighbours_ids = None
+                agent.allowed_actions = None
+
                 agent.id = int(agent.name.split('_')[1])
 
             if check_connected(world.agents):
                 logging.debug("Created a connected graph!")
                 break
+
 
         # As it's static for every agent calculate its one and two hop neighbours
         for agent in world.agents:
@@ -357,11 +259,27 @@ class Scenario(BaseScenario):
             agent.one_hop_neighbours_ids = one_hop_neighbours_ids
             agent.two_hop_neighbours_ids = final_two_hop
 
+            # Calc every combination of the agent's neighbours to get allowed actions
+            neighbours_combinations = list(itertools.product([0, 1], repeat=sum(one_hop_neighbours_ids)))
+            indices = [i for i, x in enumerate(one_hop_neighbours_ids) if x == 1]
+
+            actions_dim = np.zeros(NUMBER_OF_AGENTS)
+            actions_dim.fill(2)
+            allowed_actions_mask = [False] * int(np.prod(actions_dim))
+            for element in neighbours_combinations:
+                allowed_action_binary = [0] * NUMBER_OF_AGENTS
+                for i in range(len(element)):
+                    allowed_action_binary[indices[i]] = element[i]
+
+                res = int("".join(str(x) for x in allowed_action_binary), 2)
+                allowed_actions_mask[res] = True
+
+            agent.allowed_actions = allowed_actions_mask
         # Reset messages counter
         world.messages_transmitted = 0
         # Randomly select an agent with the message
         random_agent = np_random.choice(world.agents)
-        random_agent.state.received_from[random_agent.id] = 1
+        random_agent.state.message_origin = 1
 
     def benchmark_data(self, agent, world):
         return self.reward(agent, world)
@@ -387,11 +305,11 @@ class Scenario(BaseScenario):
 
         # communication status, received and message transmitted flag
         received = agent.state.received_from
-        transmitted_to = agent.state.c
+        transmitted_to = agent.state.transmitted_to
 
         agent_observation = np.concatenate([agent.one_hop_neighbours_ids] + [agent.two_hop_neighbours_ids] + [transmitted_to] + [received])
-
-        return agent_observation
+        assert(sum(agent.allowed_actions) == 2 ** sum(agent.one_hop_neighbours_ids))
+        return {"observation": agent_observation, "action_mask": agent.allowed_actions}
 
 
 def calculate_neighbours(agent, possible_neighbours):
@@ -407,3 +325,38 @@ def calculate_neighbours(agent, possible_neighbours):
             neighbours.append(None)
 
     return np.array(neighbours), np.array(neighbours_names)
+
+
+def check_connected(agents):
+    visited = set()  # Set to keep track of visited nodes of graph.
+
+    def dfs(visited, graph, node):
+        if node not in visited:
+            visited.add(node)
+            # TODO: use agent attribute instead of calculation
+            neighbours, _ = calculate_neighbours(node, graph)
+            for neighbour in neighbours:
+                if neighbour is not None:
+                    dfs(visited, graph, neighbour)
+
+    dfs(visited, agents, agents[0])
+
+    return True if len(visited) == len(agents) else False
+
+
+def make_env(raw_env):
+    def env(**kwargs):
+        env = raw_env(**kwargs)
+        if env.continuous_actions:
+            env = wrappers.ClipOutOfBoundsWrapper(env)
+        else:
+            env = MultiDiscreteToDiscreteWrapper(env)
+            env = wrappers.AssertOutOfBoundsWrapper(env)
+        env = wrappers.OrderEnforcingWrapper(env)
+        return env
+
+    return env
+
+
+env = make_env(RawEnv)
+# parallel_env = parallel_wrapper_fn(env)

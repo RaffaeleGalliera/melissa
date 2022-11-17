@@ -11,7 +11,7 @@ from torch.distributions import Independent, Normal
 from torch.utils.tensorboard import SummaryWriter
 
 from tianshou.data import Collector, VectorReplayBuffer
-from tianshou.env import DummyVectorEnv
+from tianshou.env import SubprocVectorEnv, DummyVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
 from tianshou.policy import BasePolicy, MultiAgentPolicyManager, DQNPolicy
 from tianshou.trainer import onpolicy_trainer, offpolicy_trainer
@@ -34,12 +34,6 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--gamma', type=float, default=0.9, help='a smaller gamma favors earlier win'
     )
-    parser.add_argument(
-        '--n-pistons',
-        type=int,
-        default=3,
-        help='Number of pistons(agents) in the env'
-    )
     parser.add_argument('--n-step', type=int, default=100)
     parser.add_argument('--target-update-freq', type=int, default=320)
     parser.add_argument('--epoch', type=int, default=100)
@@ -50,8 +44,8 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument('--update-per-step', type=float, default=0.1)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--hidden-sizes', type=int, nargs='*', default=[128, 128, 128, 128])
-    parser.add_argument('--training-num', type=int, default=10)
-    parser.add_argument('--test-num', type=int, default=10)
+    parser.add_argument('--training-num', type=int, default=1)
+    parser.add_argument('--test-num', type=int, default=1)
     parser.add_argument('--logdir', type=str, default='log')
 
     parser.add_argument(
@@ -89,8 +83,8 @@ def get_args() -> argparse.Namespace:
 
 def get_env(render_mode=None):
     env = simple_mpr_v0.env(render_mode=render_mode)
-    env = ss.pad_observations_v0(env)
-    env = ss.pad_action_space_v0(env)
+    # env = ss.pad_observations_v0(env)
+    # env = ss.pad_action_space_v0(env)
     return PettingZooEnv(env)
 
 
@@ -103,7 +97,7 @@ def get_agents(
     observation_space = env.observation_space['observation'] if isinstance(
         env.observation_space, gym.spaces.Dict
     ) else env.observation_space
-    args.state_shape = observation_space.shape or observation_space.n
+    args.state_shape = observation_space['observation'].shape or observation_space['observation'].n
     args.action_shape = env.action_space.shape or env.action_space.n
     args.max_action = 1
 
@@ -123,8 +117,7 @@ def get_agents(
                 net.parameters(), lr=args.lr
             )
 
-            def dist(*logits):
-                return Independent(Normal(*logits), 1)
+            dist = torch.distributions.Categorical
 
             agent = DQNPolicy(
                 net,
@@ -149,8 +142,8 @@ def train_agent(
     agents: Optional[List[BasePolicy]] = None,
     optims: Optional[List[torch.optim.Optimizer]] = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = DummyVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = DummyVectorEnv([get_env for _ in range(args.test_num)])
+    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
+    test_envs = SubprocVectorEnv([get_env for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -215,7 +208,7 @@ def train_agent(
 def watch(
     args: argparse.Namespace = get_args(), policy: Optional[BasePolicy] = None
 ) -> None:
-    env = DummyVectorEnv([lambda: get_env(render_mode="human")])
+    env = SubprocVectorEnv([lambda: get_env(render_mode="human")])
     if not policy:
         warnings.warn(
             "watching random agents, as loading pre-trained policies is "
