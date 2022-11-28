@@ -36,7 +36,7 @@ def get_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument('--n-step', type=int, default=100)
     parser.add_argument('--target-update-freq', type=int, default=320)
-    parser.add_argument('--epoch', type=int, default=100)
+    parser.add_argument('--epoch', type=int, default=1000)
     parser.add_argument('--step-per-epoch', type=int, default=1000)
     parser.add_argument('--step-per-collect', type=int, default=10)
     # parser.add_argument('--episode-per-collect', type=int, default=16)
@@ -104,29 +104,30 @@ def get_agents(
     if agents is None:
         agents = []
         optims = []
+
+        # model
+        net = Net(
+            args.state_shape,
+            args.action_shape,
+            hidden_sizes=args.hidden_sizes,
+            device=args.device,
+        ).to(args.device)
+
+        optim = torch.optim.Adam(
+            net.parameters(), lr=args.lr
+        )
+
+        dist = torch.distributions.Categorical
+
+        agent = DQNPolicy(
+            net,
+            optim,
+            args.gamma,
+            args.n_step,
+            target_update_freq=args.target_update_freq
+        )
+
         for _ in range(NUMBER_OF_AGENTS):
-            # model
-            net = Net(
-                args.state_shape,
-                args.action_shape,
-                hidden_sizes=args.hidden_sizes,
-                device=args.device,
-            ).to(args.device)
-
-            optim = torch.optim.Adam(
-                net.parameters(), lr=args.lr
-            )
-
-            dist = torch.distributions.Categorical
-
-            agent = DQNPolicy(
-                net,
-                optim,
-                args.gamma,
-                args.n_step,
-                target_update_freq=args.target_update_freq
-            )
-
             agents.append(agent)
             optims.append(optim)
 
@@ -157,7 +158,7 @@ def train_agent(
         policy,
         train_envs,
         VectorReplayBuffer(args.buffer_size, len(train_envs)),
-        exploration_noise=False  # True
+        exploration_noise=True
     )
     test_collector = Collector(policy, test_envs)
     train_collector.collect(n_step=args.batch_size * args.training_num)
@@ -168,7 +169,12 @@ def train_agent(
     logger = TensorboardLogger(writer)
 
     def save_best_fn(policy):
-        pass
+        model_save_path = os.path.join(
+            args.logdir, "mpr", "dqn", "weights", f"policy.pth"
+        )
+        torch.save(
+            policy.policies[agents[0]].state_dict(), model_save_path
+        )
 
     def stop_fn(mean_rewards):
         return False

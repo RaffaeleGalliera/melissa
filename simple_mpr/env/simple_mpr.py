@@ -1,3 +1,6 @@
+import math
+import random
+
 import numpy as np
 import logging
 import itertools
@@ -12,7 +15,7 @@ import pettingzoo.utils.wrappers as wrappers
 from simple_mpr.env.utils.wrappers.multi_discrete_to_discrete import MultiDiscreteToDiscreteWrapper
 
 import pygame
-from .utils.constants import AREA_OF_INFLUENCE, NUMBER_OF_AGENTS
+from .utils.constants import RADIUS_OF_INFLUENCE, NUMBER_OF_AGENTS
 from .utils.core import MprAgent, MprWorld
 from gymnasium import spaces
 
@@ -36,6 +39,10 @@ class RawEnv(SimpleEnv, EzPickle):
             continuous_actions=continuous_actions
         )
         self.metadata["name"] = "simple_mpr"
+        self.width = 1000
+        self.height = 1000
+        self.screen = pygame.Surface([self.width, self.height])
+        self.max_size = 1
 
         # self._agent_selector = MprSelector(self.agents, self.world.agents)
         self._agent_selector = agent_selector(self.agents)
@@ -73,6 +80,9 @@ class RawEnv(SimpleEnv, EzPickle):
         for e, entity in enumerate(self.world.entities):
             # geometry
             x, y = entity.state.p_pos
+            x_influence = ((x + RADIUS_OF_INFLUENCE) / cam_range) * self.width // 2 * 0.9
+            x_influence += self.width // 2
+
             y *= (
                 -1
             )  # this makes the display mimic the old pyglet setup (ie. flips image)
@@ -83,10 +93,12 @@ class RawEnv(SimpleEnv, EzPickle):
             x += self.width // 2
             y += self.height // 2
 
+            aoi_radius = math.dist([x, y], [x_influence, y])
+
             # Draw AoI
             aoi_color = (0, 255, 0, 128) if sum(entity.state.transmitted_to) else (255, 0, 0, 128)
             surface = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
-            pygame.draw.circle(surface, aoi_color, (x, y), (entity.size + AREA_OF_INFLUENCE) * 350)
+            pygame.draw.circle(surface, aoi_color, (x, y), aoi_radius)
             self.screen.blit(surface, (0, 0))
 
             entity_color = np.array([78, 237, 105]) if sum(entity.state.received_from) or entity.state.message_origin else entity.color
@@ -209,28 +221,28 @@ class Scenario(BaseScenario):
             agent.color = np.array([237, 200, 78])
             # agent.color = np.array([0.25, 0.25, 0.25])
 
-        # Set random initial state
-        while True:
-            for agent in world.agents:
-                agent.state.p_pos = np_random.uniform(-1, +1, world.dim_p)
-                agent.state.p_vel = np.zeros(world.dim_p)
-                agent.state.c = np.zeros(world.dim_c)
-                agent.state.received_from = np.zeros(NUMBER_OF_AGENTS)
-                agent.state.transmitted_to = np.zeros(NUMBER_OF_AGENTS)
-                agent.state.relays_for = np.zeros(NUMBER_OF_AGENTS)
-                agent.state.relayed_by = np.zeros(NUMBER_OF_AGENTS)
-                agent.state.message_origin = 0
-                agent.one_hop_neighbours_ids = None
-                agent.two_hop_neighbours_ids = None
-                agent.one_hop_neighbours_neighbours_ids = None
-                agent.allowed_actions = None
+        random.shuffle(world.agents)
+        previous_position = np_random.uniform(-1, +1, world.dim_p)
+        for agent in world.agents:
+            r = RADIUS_OF_INFLUENCE * 0.99
+            theta = np_random.uniform() * 2 * math.pi
+            agent.state.p_pos = [previous_position[0] + r * math.cos(theta), previous_position[1] + r * math.sin(theta)]
+            previous_position = agent.state.p_pos
+            agent.state.p_vel = np.zeros(world.dim_p)
+            agent.state.c = np.zeros(world.dim_c)
+            agent.state.received_from = np.zeros(NUMBER_OF_AGENTS)
+            agent.state.transmitted_to = np.zeros(NUMBER_OF_AGENTS)
+            agent.state.relays_for = np.zeros(NUMBER_OF_AGENTS)
+            agent.state.relayed_by = np.zeros(NUMBER_OF_AGENTS)
+            agent.state.message_origin = 0
+            agent.one_hop_neighbours_ids = None
+            agent.two_hop_neighbours_ids = None
+            agent.one_hop_neighbours_neighbours_ids = None
+            agent.allowed_actions = None
 
-                agent.id = int(agent.name.split('_')[1])
+            agent.id = int(agent.name.split('_')[1])
 
-            if check_connected(world.agents):
-                logging.debug("Created a connected graph!")
-                break
-
+        assert (check_connected(world.agents))
 
         # As it's static for every agent calculate its one and two hop neighbours
         for agent in world.agents:
@@ -249,6 +261,7 @@ class Scenario(BaseScenario):
 
             assert np.array(two_hop_neighbours_ids).shape == (NUMBER_OF_AGENTS, NUMBER_OF_AGENTS)
 
+            # Not used for now, the information is given in full about neighbourhoods
             final_two_hop = np.zeros((NUMBER_OF_AGENTS,))
             for sublist in two_hop_neighbours_ids:
                 temp = []
@@ -257,7 +270,7 @@ class Scenario(BaseScenario):
                 final_two_hop = temp
 
             agent.one_hop_neighbours_ids = one_hop_neighbours_ids
-            agent.two_hop_neighbours_ids = final_two_hop
+            agent.two_hop_neighbours_ids = two_hop_neighbours_ids
 
             # Calc every combination of the agent's neighbours to get allowed actions
             neighbours_combinations = list(itertools.product([0, 1], repeat=sum(one_hop_neighbours_ids)))
@@ -307,7 +320,7 @@ class Scenario(BaseScenario):
         received = agent.state.received_from
         transmitted_to = agent.state.transmitted_to
 
-        agent_observation = np.concatenate([agent.one_hop_neighbours_ids] + [agent.two_hop_neighbours_ids] + [transmitted_to] + [received])
+        agent_observation = np.concatenate([agent.one_hop_neighbours_ids] + agent.two_hop_neighbours_ids + [transmitted_to] + [received])
         assert(sum(agent.allowed_actions) == 2 ** sum(agent.one_hop_neighbours_ids))
         return {"observation": agent_observation, "action_mask": agent.allowed_actions}
 
@@ -316,8 +329,8 @@ def calculate_neighbours(agent, possible_neighbours):
     neighbours = []
     neighbours_names = []
     for possible_neighbour in possible_neighbours:
-        l2_distance = np.sum(np.square(possible_neighbour.state.p_pos - agent.state.p_pos))
-        if l2_distance <= AREA_OF_INFLUENCE:
+        l2_distance = math.dist(possible_neighbour.state.p_pos, agent.state.p_pos)
+        if l2_distance <= RADIUS_OF_INFLUENCE:
             neighbours_names.append(1)
             neighbours.append(possible_neighbour)
         else:
