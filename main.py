@@ -19,9 +19,48 @@ from tianshou.utils import TensorboardLogger
 from tianshou.utils.net.continuous import ActorProb, Critic
 from tianshou.utils.net.common import Net
 
+from graph_env import graph_env_v0
 from simple_mpr import simple_mpr_v0
 import supersuit as ss
 from simple_mpr.env.utils.constants import NUMBER_OF_AGENTS
+
+from torch_geometric.nn import GCNConv
+
+
+class GCN(nn.Module):
+    def __init__(self, state_shape, action_shape):
+        super(GCN, self).__init__()
+        self.action_shape = action_shape
+        self.conv1 = GCNConv(10, 128)
+        self.flatten = torch.nn.Flatten()
+        self.lin2 = nn.Linear(128, 128)
+        self.lin3 = nn.Linear(128, np.prod(action_shape))
+        # self.lin3 = nn.Linear(128, 2)
+
+    def forward(self, obs, state=None, info={}):
+        logits = []
+        for observation in obs.observation:
+            x = observation[2]
+            edge_index = observation[0]
+            index = np.where(observation[1] == observation[3])
+
+            x = self.conv1(x, edge_index)
+            x = x.relu()
+            x = self.lin2(x[index])
+            x = x.relu()
+            x = torch.nn.functional.dropout(x, training=self.training)
+            x = self.lin3(x)
+            logits.append(x[0])
+
+        logits = torch.stack(logits)
+        # TODO: need to fix shapes and get the masks right for multiple predictions
+        # print(logits.shape)
+        # if not isinstance(obs, torch.Tensor):
+        #     obs = torch.tensor(obs, dtype=torch.float)
+        # batch = obs.shape[0]
+        # logits = self.model(obs.view(batch, -1))
+        # print(logits[index].cpu().detach().numpy())
+        return logits, state
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -82,7 +121,7 @@ def get_args() -> argparse.Namespace:
 
 
 def get_env(render_mode=None):
-    env = simple_mpr_v0.env(render_mode=render_mode)
+    env = graph_env_v0.env(render_mode=render_mode)
     # env = ss.pad_observations_v0(env)
     # env = ss.pad_action_space_v0(env)
     return PettingZooEnv(env)
@@ -106,12 +145,10 @@ def get_agents(
         optims = []
 
         # model
-        net = Net(
+        net = GCN(
             args.state_shape,
             args.action_shape,
-            hidden_sizes=args.hidden_sizes,
-            device=args.device,
-        ).to(args.device)
+        )
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
@@ -124,6 +161,7 @@ def get_agents(
             optim,
             args.gamma,
             args.n_step,
+            # is_double=False,
             target_update_freq=args.target_update_freq
         )
 
@@ -143,8 +181,8 @@ def train_agent(
     agents: Optional[List[BasePolicy]] = None,
     optims: Optional[List[torch.optim.Optimizer]] = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = SubprocVectorEnv([get_env for _ in range(args.test_num)])
+    train_envs = DummyVectorEnv([get_env for _ in range(args.training_num)])
+    test_envs = DummyVectorEnv([get_env for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -161,7 +199,7 @@ def train_agent(
         exploration_noise=True
     )
     test_collector = Collector(policy, test_envs)
-    train_collector.collect(n_step=args.batch_size * args.training_num)
+    # train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
     log_path = os.path.join(args.logdir, 'mpr', 'dqn')
     writer = SummaryWriter(log_path)
