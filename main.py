@@ -31,7 +31,7 @@ class GCN(nn.Module):
     def __init__(self, state_shape, action_shape):
         super(GCN, self).__init__()
         self.action_shape = action_shape
-        self.conv1 = GCNConv(10, 128)
+        self.conv1 = GCNConv(NUMBER_OF_AGENTS, 128)
         self.flatten = torch.nn.Flatten()
         self.lin2 = nn.Linear(128, 128)
         self.lin3 = nn.Linear(128, np.prod(action_shape))
@@ -40,8 +40,8 @@ class GCN(nn.Module):
     def forward(self, obs, state=None, info={}):
         logits = []
         for observation in obs.observation:
-            x = torch.tensor(observation[2])
-            edge_index = torch.tensor(observation[0])
+            x = torch.from_numpy(observation[2]).to(device='cuda')
+            edge_index = torch.from_numpy(observation[0]).to(device='cuda')
             index = np.where(observation[1] == observation[3])
 
             x = self.conv1(x, edge_index)
@@ -148,7 +148,7 @@ def get_agents(
         net = GCN(
             args.state_shape,
             args.action_shape,
-        )
+        ).to(device=args.device)
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
@@ -181,8 +181,8 @@ def train_agent(
     agents: Optional[List[BasePolicy]] = None,
     optims: Optional[List[torch.optim.Optimizer]] = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = SubprocVectorEnv([get_env for _ in range(args.test_num)])
+    train_envs = DummyVectorEnv([get_env for _ in range(args.training_num)])
+    test_envs = DummyVectorEnv([get_env for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
