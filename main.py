@@ -40,8 +40,8 @@ class GCN(nn.Module):
     def forward(self, obs, state=None, info={}):
         logits = []
         for observation in obs.observation:
-            x = observation[2]
-            edge_index = observation[0]
+            x = torch.tensor(observation[2])
+            edge_index = torch.tensor(observation[0])
             index = np.where(observation[1] == observation[3])
 
             x = self.conv1(x, edge_index)
@@ -181,8 +181,8 @@ def train_agent(
     agents: Optional[List[BasePolicy]] = None,
     optims: Optional[List[torch.optim.Optimizer]] = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = DummyVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = DummyVectorEnv([get_env for _ in range(args.test_num)])
+    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
+    test_envs = SubprocVectorEnv([get_env for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
