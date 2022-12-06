@@ -19,9 +19,36 @@ from tianshou.utils import TensorboardLogger
 from tianshou.utils.net.continuous import ActorProb, Critic
 from tianshou.utils.net.common import Net
 
-from simple_mpr import simple_mpr_v0
-import supersuit as ss
-from simple_mpr.env.utils.constants import NUMBER_OF_AGENTS
+from graph_env import graph_env_v0
+from graph_env.env.utils.constants import NUMBER_OF_AGENTS
+
+from torch_geometric.nn import GCNConv
+
+class GCN(nn.Module):
+    def __init__(self, state_shape, action_shape):
+        super(GCN, self).__init__()
+        self.action_shape = action_shape
+        self.conv1 = GCNConv(NUMBER_OF_AGENTS, 128)
+        self.lin2 = nn.Linear(128, 128)
+        self.lin3 = nn.Linear(128, np.prod(action_shape))
+        # self.lin3 = nn.Linear(128, 2)
+
+    def forward(self, obs, state=None, info={}):
+        logits = []
+        for observation in obs.observation:
+            # TODO: Need here we move tensors to CUDA, cannot just put it in Batch because of data time -> slows down
+            x = torch.Tensor(observation[2]).to(device='cuda', dtype=torch.float32)
+            edge_index = torch.Tensor(observation[0]).to(device='cuda', dtype=torch.long)
+            x = self.conv1(x, edge_index)
+            x = x.relu()
+            x = self.lin2(x)
+            x = x.relu()
+            x = torch.nn.functional.dropout(x, training=self.training)
+            x = self.lin3(x)
+            logits.append(x[observation[3]].flatten())
+        logits = torch.stack(logits)
+
+        return logits, state
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -82,7 +109,7 @@ def get_args() -> argparse.Namespace:
 
 
 def get_env(render_mode=None):
-    env = simple_mpr_v0.env(render_mode=render_mode)
+    env = graph_env_v0.env(render_mode=render_mode)
     # env = ss.pad_observations_v0(env)
     # env = ss.pad_action_space_v0(env)
     return PettingZooEnv(env)
@@ -106,12 +133,10 @@ def get_agents(
         optims = []
 
         # model
-        net = Net(
+        net = GCN(
             args.state_shape,
             args.action_shape,
-            hidden_sizes=args.hidden_sizes,
-            device=args.device,
-        ).to(args.device)
+        ).to(device=args.device)
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
@@ -124,6 +149,7 @@ def get_agents(
             optim,
             args.gamma,
             args.n_step,
+            # is_double=False,
             target_update_freq=args.target_update_freq
         )
 
@@ -161,7 +187,7 @@ def train_agent(
         exploration_noise=True
     )
     test_collector = Collector(policy, test_envs)
-    train_collector.collect(n_step=args.batch_size * args.training_num)
+    # train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
     log_path = os.path.join(args.logdir, 'mpr', 'dqn')
     writer = SummaryWriter(log_path)
