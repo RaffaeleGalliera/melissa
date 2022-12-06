@@ -2,7 +2,7 @@ import pprint
 
 import pytest
 from main import get_args, train_agent, watch
-
+import torch.multiprocessing as mp
 
 # @pytest.mark.skip(reason="runtime too long and unstable result")
 def test_mpr(args=get_args()):
@@ -20,4 +20,5 @@ def test_mpr(args=get_args()):
 
 
 if __name__ == '__main__':
+    mp.set_start_method('spawn', force=True)
     test_mpr(get_args())

@@ -20,19 +20,15 @@ from tianshou.utils.net.continuous import ActorProb, Critic
 from tianshou.utils.net.common import Net
 
 from graph_env import graph_env_v0
-from simple_mpr import simple_mpr_v0
-import supersuit as ss
-from simple_mpr.env.utils.constants import NUMBER_OF_AGENTS
+from graph_env.env.utils.constants import NUMBER_OF_AGENTS
 
 from torch_geometric.nn import GCNConv
-
 
 class GCN(nn.Module):
     def __init__(self, state_shape, action_shape):
         super(GCN, self).__init__()
         self.action_shape = action_shape
         self.conv1 = GCNConv(NUMBER_OF_AGENTS, 128)
-        self.flatten = torch.nn.Flatten()
         self.lin2 = nn.Linear(128, 128)
         self.lin3 = nn.Linear(128, np.prod(action_shape))
         # self.lin3 = nn.Linear(128, 2)
@@ -40,26 +36,18 @@ class GCN(nn.Module):
     def forward(self, obs, state=None, info={}):
         logits = []
         for observation in obs.observation:
-            x = torch.from_numpy(observation[2]).to(device='cuda')
-            edge_index = torch.from_numpy(observation[0]).to(device='cuda')
-            index = np.where(observation[1] == observation[3])
-
+            # TODO: Need here we move tensors to CUDA, cannot just put it in Batch because of data time -> slows down
+            x = torch.Tensor(observation[2]).to(device='cuda', dtype=torch.float32)
+            edge_index = torch.Tensor(observation[0]).to(device='cuda', dtype=torch.long)
             x = self.conv1(x, edge_index)
             x = x.relu()
-            x = self.lin2(x[index])
+            x = self.lin2(x)
             x = x.relu()
             x = torch.nn.functional.dropout(x, training=self.training)
             x = self.lin3(x)
-            logits.append(x[0])
-
+            logits.append(x[observation[3]].flatten())
         logits = torch.stack(logits)
-        # TODO: need to fix shapes and get the masks right for multiple predictions
-        # print(logits.shape)
-        # if not isinstance(obs, torch.Tensor):
-        #     obs = torch.tensor(obs, dtype=torch.float)
-        # batch = obs.shape[0]
-        # logits = self.model(obs.view(batch, -1))
-        # print(logits[index].cpu().detach().numpy())
+
         return logits, state
 
 
@@ -181,8 +169,8 @@ def train_agent(
     agents: Optional[List[BasePolicy]] = None,
     optims: Optional[List[torch.optim.Optimizer]] = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = DummyVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = DummyVectorEnv([get_env for _ in range(args.test_num)])
+    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
+    test_envs = SubprocVectorEnv([get_env for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
