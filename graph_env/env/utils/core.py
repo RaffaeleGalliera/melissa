@@ -1,11 +1,8 @@
 import itertools
-import math
-
-import networkx as nx
 import numpy as np
 import logging
 
-from pettingzoo.mpe._mpe_utils.core import AgentState, Agent, World
+import networkx as nx
 from torch_geometric.utils import from_networkx
 
 from .constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE
@@ -21,16 +18,22 @@ class MprAgentState:
 
 
 class MprAgent:
-    def __init__(self, id, local_view, state=None, pos=None):
+    def __init__(self,
+                 id,
+                 local_view,
+                 size=0.05,
+                 color=(0, 0, 0),
+                 state=None,
+                 pos=None):
         # state
         self.id = id
         self.name = str(id)
         self.state = MprAgentState() if state is None else state
         self.local_view = local_view
         self.geometric_data = from_networkx(local_view)
-        self.size = 0.050
+        self.size = size
         self.pos = pos
-        self.color = [0, 0, 0]
+        self.color = color
         self.one_hop_neighbours_ids = None
         self.one_hop_neighbours_neighbours_ids = None
         self.allowed_actions = None
@@ -50,13 +53,14 @@ class MprWorld:
             self,
             number_of_agents,
             radius,
-            np_random
+            np_random,
+            graph=None
     ):
         self.messages_transmitted = 0
         self.num_agents = number_of_agents
         self.radius = radius
         self.graph = nx.random_geometric_graph(n=number_of_agents,
-                                               radius=radius)
+                                               radius=radius) if graph is None else graph
         self.agents = [MprAgent(i, nx.ego_graph(self.graph, i, undirected=True))
                        for i in range(number_of_agents)]
         self.num_agents = number_of_agents
