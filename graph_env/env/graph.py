@@ -223,9 +223,9 @@ class GraphEnv(AECEnv):
         features = np.asarray(agent_observation.features, dtype=np.float32)
         labels = np.asarray(agent_observation.label, dtype=object)
         data = Batch.stack([Batch(observation=edge_index),
-                     Batch(observation=labels),
-                     Batch(observation=features),
-                     Batch(observation=np.where(labels == agent.id))])
+                            Batch(observation=labels),
+                            Batch(observation=features),
+                            Batch(observation=np.where(labels == agent.id))])
 
         agent_observation_with_mask = {
             "observation": data,
@@ -249,7 +249,6 @@ class GraphEnv(AECEnv):
 
         self.world.reset()
         self.current_actions = [None] * self.num_agents
-
 
     def step(self, action):
         if(

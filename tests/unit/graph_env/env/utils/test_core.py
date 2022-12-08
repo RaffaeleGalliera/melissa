@@ -20,6 +20,9 @@ def world():
 def graph():
     graph = nx.Graph()
     graph.add_edges_from([(0, 1), (1, 2), (2, 3), (3, 0)])
+    for node in graph.nodes:
+        graph.nodes[node]['pos'] = (0, 0)
+
     return graph
 
 
@@ -78,3 +81,23 @@ class TestMprWorld:
         agent.action = [0, 1, 0, 0]
         world.set_relays(agent)
         assert world.agents[1].state.relays_for[agent.id]
+
+    def test_update_agent_state_relay_node(self, world, graph):
+        world = world(graph)
+
+        world.agents[0].state.received_from = [0, 0, 0, 1]
+        world.agents[0].state.relays_for = [0, 1, 0, 1]
+
+        world.update_agent_state(world.agents[0])
+        assert world.agents[1].state.received_from[0]
+        assert world.messages_transmitted == 1
+
+    def test_update_agent_state_message_origin(self, world, graph):
+        world = world(graph)
+        for agent in world.agents:
+            agent.state.message_origin = 0
+        world.agents[0].state.message_origin = 1
+        world.update_agent_state(world.agents[0])
+
+
+

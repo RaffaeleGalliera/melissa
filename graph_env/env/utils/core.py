@@ -61,6 +61,7 @@ class MprWorld:
         self.radius = radius
         self.graph = nx.random_geometric_graph(n=number_of_agents,
                                                radius=radius) if graph is None else graph
+        self.random_structure = False if graph else True
         self.agents = [MprAgent(i, nx.ego_graph(self.graph, i, undirected=True))
                        for i in range(number_of_agents)]
         self.num_agents = number_of_agents
@@ -113,12 +114,8 @@ class MprWorld:
             logging.debug(f"Agent {agent.name} could not send")
 
     def reset(self):
-        while True:
-            self.graph = nx.random_geometric_graph(n=self.num_agents, radius=self.radius)
-            if nx.is_connected(self.graph):
-                break
-            else:
-                logging.debug("Generated graph not connected, retry")
+        if self.random_structure:
+            self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
 
         for agent in self.agents:
             agent.state.received_from = np.zeros(self.num_agents)
@@ -136,7 +133,8 @@ class MprWorld:
         actions_dim = np.zeros(NUMBER_OF_AGENTS)
         actions_dim.fill(2)
         for agent in self.agents:
-            agent.reset(local_view=nx.ego_graph(self.graph, agent.id, undirected=True), pos = self.graph.nodes[agent.id]['pos'])
+            agent.reset(local_view=nx.ego_graph(self.graph, agent.id, undirected=True),
+                        pos=self.graph.nodes[agent.id]['pos'])
             agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['features']
 
             # Calc every combination of the agent's neighbours to get allowed actions
@@ -156,5 +154,16 @@ class MprWorld:
 
         random_agent = self.np_random.choice(self.agents)
         random_agent.state.message_origin = 1
+
+
+def create_connected_graph(n, radius):
+    while True:
+        graph = nx.random_geometric_graph(n=n, radius=radius)
+        if nx.is_connected(graph):
+            break
+        else:
+            logging.debug("Generated graph not connected, retry")
+
+    return graph
 
 
