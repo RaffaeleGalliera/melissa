@@ -10,7 +10,7 @@ from .constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE
 
 def mpr_heuristic(one_hop_neighbours_ids,
                   two_hop_neighbours_ids,
-                  id,
+                  agent_id,
                   local_view
                   ):
     d_y = dict()
@@ -21,10 +21,10 @@ def mpr_heuristic(one_hop_neighbours_ids,
     mpr = np.zeros(len(one_hop_neighbours_ids))
 
     # OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html#section-8.3.1
-    for neighbor in local_view.neighbors(id):
+    for neighbor in local_view.neighbors(agent_id):
         clean_neighbor_neighbors = local_view.nodes[neighbor]['features'].copy()
         # Exclude from the list the 2hop neighbours already reachable by self
-        clean_neighbor_neighbors[id] = 0
+        clean_neighbor_neighbors[agent_id] = 0
         for index in [i for i, x in enumerate(one_hop_neighbours_ids) if
                       x == 1]:
             clean_neighbor_neighbors[index] = 0
@@ -47,7 +47,7 @@ def mpr_heuristic(one_hop_neighbours_ids,
          zip(two_hop_neighbours_ids, covered)])
     while (reachable_uncovered != 0).any():
         reachability = dict()
-        for neighbor in local_view.neighbors(id):
+        for neighbor in local_view.neighbors(agent_id):
             reachability[int(local_view.nodes[neighbor]['label'])] = sum(
                 local_view.nodes[neighbor]['features'].astype(int) & reachable_uncovered.astype(int))
         max_reachability = [k for k, v in reachability.items() if v == max(reachability.values())]
