@@ -1,9 +1,13 @@
 gym~=0.26.2
-numpy~=1.23.4
+numpy==1.23.5
 torch~=1.13.0
-SuperSuit~=3.7.0
 tianshou~=0.4.10
 pytest~=7.2.0
 pygame~=2.1.2
 Gymnasium~=0.26.3
-PettingZoo~=1.22.1
+PettingZoo==1.22.2
+networkx~=2.8.8
+torch-geometric~=2.2.0
+# pyg-lib
+# torch-scatter
+# torch-sparse
