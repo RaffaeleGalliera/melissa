@@ -22,9 +22,9 @@ COPY requirements.txt /home/devuser/app/requirements.txt
 WORKDIR /home/devuser/app
 RUN pip install -r requirements.txt
 COPY . /home/devuser/app
+WORKDIR /home/devuser/dev
 
 RUN pip install pyg-lib \
     torch-scatter \
     torch-sparse -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
-
 

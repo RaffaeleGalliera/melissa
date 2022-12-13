@@ -2,7 +2,7 @@ import pytest
 import networkx as nx
 from gymnasium.utils import seeding
 from graph_env.env.utils.core import MprAgent, MprWorld, MprAgentState
-
+import numpy as np
 
 @pytest.fixture
 def world():
@@ -98,6 +98,22 @@ class TestMprWorld:
             agent.state.message_origin = 0
         world.agents[0].state.message_origin = 1
         world.update_agent_state(world.agents[0])
+
+    def test_one_hop_neighbours(self, world, graph):
+        world = world(graph)
+
+        assert (world.agents[0].one_hop_neighbours_ids == np.array([0, 1, 0, 1])).all()
+        assert (world.agents[1].one_hop_neighbours_ids == np.array([1, 0, 1, 0])).all()
+        assert (world.agents[2].one_hop_neighbours_ids == np.array([0, 1, 0, 1])).all()
+        assert (world.agents[3].one_hop_neighbours_ids == np.array([1, 0, 1, 0])).all()
+
+    def test_two_hop_neighbours(self, world, graph):
+        world = world(graph)
+        assert (world.agents[0].two_hop_neighbours_ids == np.array([0, 0, 1, 0])).all()
+        assert (world.agents[1].two_hop_neighbours_ids == np.array([0, 0, 0, 1])).all()
+        assert (world.agents[2].two_hop_neighbours_ids == np.array([1, 0, 0, 0])).all()
+        assert (world.agents[3].two_hop_neighbours_ids == np.array([0, 1, 0, 0])).all()
+
 
 
 

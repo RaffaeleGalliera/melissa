@@ -219,6 +219,8 @@ class GraphEnv(AECEnv):
     def observation(self, agent):
         agent_observation = agent.geometric_data
 
+        # Every entry needs to be wrapped in a Batch object, otherwise
+        # we will have shape errors in the data replay buffer
         edge_index = np.asarray(agent_observation.edge_index, dtype=np.int32)
         features = np.asarray(agent_observation.features, dtype=np.float32)
         labels = np.asarray(agent_observation.label, dtype=object)
@@ -291,8 +293,7 @@ class GraphEnv(AECEnv):
     def _execute_world_step(self):
         for i, agent in enumerate(self.world.agents):
             action = self.current_actions[i]
-            scenario_action = []
-            scenario_action.append(action)
+            scenario_action = [action]
             self._set_action(scenario_action, agent, self.action_spaces[agent.name])
 
         self.world.step()

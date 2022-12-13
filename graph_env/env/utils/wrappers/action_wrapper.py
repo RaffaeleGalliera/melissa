@@ -1,7 +1,6 @@
 """
 Wrapper to modify actions before step is taken
 """
-
 from pettingzoo.utils.wrappers.base import BaseWrapper
 
 
