@@ -1,5 +1,6 @@
 import argparse
 import os
+import pickle
 import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -20,7 +21,8 @@ from tianshou.utils.net.continuous import ActorProb, Critic
 from tianshou.utils.net.common import Net
 
 from graph_env import graph_env_v0
-from graph_env.env.utils.constants import NUMBER_OF_AGENTS
+from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE
+from graph_env.env.utils.core import load_testing_graph
 
 from torch_geometric.nn import GCNConv
 import networkx as nx
@@ -112,8 +114,8 @@ def get_args() -> argparse.Namespace:
     return parser.parse_known_args()[0]
 
 
-def get_env(render_mode=None):
-    env = graph_env_v0.env(render_mode=render_mode)
+def get_env(graph=None, render_mode=None):
+    env = graph_env_v0.env(graph=graph, render_mode=render_mode)
     # env = ss.pad_observations_v0(env)
     # env = ss.pad_action_space_v0(env)
     return PettingZooEnv(env)
@@ -153,7 +155,6 @@ def get_agents(
             optim,
             args.gamma,
             args.n_step,
-            # is_double=False,
             target_update_freq=args.target_update_freq
         )
 
@@ -174,7 +175,7 @@ def train_agent(
     optims: Optional[List[torch.optim.Optimizer]] = None,
 ) -> Tuple[dict, BasePolicy]:
     train_envs = DummyVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = DummyVectorEnv([get_env for _ in range(args.test_num)])
+    test_envs = DummyVectorEnv([lambda: get_env(graph=load_testing_graph(), render_mode='human') for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
