@@ -5,9 +5,8 @@ import logging
 import networkx as nx
 from torch_geometric.utils import from_networkx
 
-from .constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE
 
-
+# OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html#section-8.3.1
 def mpr_heuristic(one_hop_neighbours_ids,
                   two_hop_neighbours_ids,
                   agent_id,
@@ -20,7 +19,6 @@ def mpr_heuristic(one_hop_neighbours_ids,
     covered = np.zeros(len(one_hop_neighbours_ids))
     mpr = np.zeros(len(one_hop_neighbours_ids))
 
-    # OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html#section-8.3.1
     for neighbor in local_view.neighbors(agent_id):
         clean_neighbor_neighbors = local_view.nodes[neighbor]['features'].copy()
         # Exclude from the list the 2hop neighbours already reachable by self
@@ -81,16 +79,16 @@ class MprAgentState:
 
 class MprAgent:
     def __init__(self,
-                 id,
+                 agent_id,
                  local_view,
                  size=0.05,
                  color=(0, 0, 0),
                  state=None,
                  pos=None,
-                 is_scripted=False):
+                 is_scripted=True):
         # state
-        self.id = id
-        self.name = str(id)
+        self.id = agent_id
+        self.name = str(agent_id)
         self.state = MprAgentState() if state is None else state
         self.local_view = local_view
         self.geometric_data = from_networkx(local_view)
@@ -104,7 +102,7 @@ class MprAgent:
         self.action_callback = mpr_heuristic if is_scripted else None
 
     def reset(self, local_view, pos):
-        self.__init__(id=self.id, local_view=local_view, state=self.state, pos=pos)
+        self.__init__(agent_id=self.id, local_view=local_view, state=self.state, pos=pos)
 
     def has_received_from_relayed_node(self):
         return sum([received and relay for received, relay in

@@ -54,7 +54,7 @@ def relaying_agent_state():
 @pytest.fixture
 def agent():
     def _agent(state, graph):
-        return MprAgent(id=0,
+        return MprAgent(agent_id=0,
                         local_view=nx.ego_graph(graph, 0, undirected=True),
                         state=state)
     return _agent
@@ -113,7 +113,3 @@ class TestMprWorld:
         assert (world.agents[1].two_hop_neighbours_ids == np.array([0, 0, 0, 1])).all()
         assert (world.agents[2].two_hop_neighbours_ids == np.array([1, 0, 0, 0])).all()
         assert (world.agents[3].two_hop_neighbours_ids == np.array([0, 1, 0, 0])).all()
-
-
-
-

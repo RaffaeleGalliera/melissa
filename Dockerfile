@@ -4,6 +4,7 @@ FROM nvcr.io/nvidia/pytorch:22.11-py3
 RUN apt-get update && \
     apt-get install -y sudo curl git-core gnupg \
     vim locales zsh wget nano \
+    xorg-dev libx11-dev libgl1-mesa-glx \
     fonts-powerline && \
     locale-gen en_US.UTF-8 && \
     adduser --quiet --disabled-password \
