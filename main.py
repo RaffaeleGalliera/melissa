@@ -23,6 +23,9 @@ from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS
 
 from torch_geometric.nn import GCNConv
+import networkx as nx
+
+os.environ["SDL_VIDEODRIVER"]="x11"
 
 class GCN(nn.Module):
     def __init__(self, state_shape, action_shape):
@@ -45,6 +48,7 @@ class GCN(nn.Module):
             x = x.relu()
             x = torch.nn.functional.dropout(x, training=self.training)
             x = self.lin3(x)
+            # print(x)
             logits.append(x[observation[3]].flatten())
         logits = torch.stack(logits)
 
@@ -169,8 +173,8 @@ def train_agent(
     agents: Optional[List[BasePolicy]] = None,
     optims: Optional[List[torch.optim.Optimizer]] = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = SubprocVectorEnv([get_env for _ in range(args.test_num)])
+    train_envs = DummyVectorEnv([get_env for _ in range(args.training_num)])
+    test_envs = DummyVectorEnv([get_env for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -228,7 +232,7 @@ def train_agent(
         test_fn=test_fn,
         stop_fn=stop_fn,
         update_per_step=args.update_per_step,
-        test_in_train=False,
+        test_in_train=True,
         save_best_fn=save_best_fn,
         logger=logger,
         resume_from_log=args.resume
