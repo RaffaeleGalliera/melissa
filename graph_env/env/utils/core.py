@@ -119,15 +119,17 @@ class MprWorld:
             radius,
             np_random,
             seed=9,
-            graph=None
+            graph=None,
+            is_scripted=False
     ):
         self.messages_transmitted = 0
         self.num_agents = number_of_agents
         self.radius = radius
         self.graph = create_connected_graph(n=self.num_agents, radius=self.radius, seed=seed) if graph is None else graph
+        self.is_scripted = is_scripted
         self.random_structure = False if graph else True
 
-        self.agents = [MprAgent(i, nx.ego_graph(self.graph, i, undirected=True))
+        self.agents = [MprAgent(i, nx.ego_graph(self.graph, i, undirected=True), is_scripted=is_scripted)
                        for i in range(number_of_agents)]
         self.np_random = np_random
         self.reset(seed)
@@ -197,6 +199,8 @@ class MprWorld:
         if self.random_structure:
             self.graph = create_connected_graph(n=self.num_agents, radius=self.radius, seed=seed)
 
+        self.messages_transmitted = 0
+
         for agent in self.agents:
             agent.state.received_from = np.zeros(self.num_agents)
             agent.state.transmitted_to = np.zeros(self.num_agents)
@@ -236,7 +240,7 @@ class MprWorld:
 
             agent.allowed_actions = allowed_actions_mask
 
-        random_agent = self.np_random.choice(self.agents)
+        random_agent = self.np_random.choice(self.agents) if self.random_structure else self.agents[0]
         random_agent.state.message_origin = 1
 
 

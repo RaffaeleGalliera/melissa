@@ -29,6 +29,7 @@ import networkx as nx
 
 os.environ["SDL_VIDEODRIVER"]="x11"
 
+
 class GCN(nn.Module):
     def __init__(self, state_shape, action_shape):
         super(GCN, self).__init__()
@@ -188,8 +189,8 @@ def train_agent(
     train_collector = Collector(
         policy,
         train_envs,
-        VectorReplayBuffer(args.buffer_size, len(train_envs)),
-        exploration_noise=True
+        VectorReplayBuffer(args.buffer_size, len(train_envs))
+        # exploration_noise=True
     )
     test_collector = Collector(policy, test_envs)
     # train_collector.collect(n_step=args.batch_size * args.training_num)

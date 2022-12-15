@@ -333,7 +333,7 @@ class GraphEnv(AECEnv):
                 continue
             if sum(other_agent.state.received_from):
                 accumulated += 1
-        completion = accumulated / len(self.world.agents) if accumulated > 0 else 0
+        completion = accumulated / len(self.world.agents)
         logging.debug(f"Agent {agent.name} received : {- 1 + completion}")
         return (- 1 + completion) * self.world.messages_transmitted
 
