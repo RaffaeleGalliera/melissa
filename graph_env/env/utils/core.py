@@ -1,4 +1,6 @@
 import itertools
+import pickle
+
 import numpy as np
 import logging
 
@@ -85,7 +87,7 @@ class MprAgent:
                  color=(0, 0, 0),
                  state=None,
                  pos=None,
-                 is_scripted=True):
+                 is_scripted=False):
         # state
         self.id = agent_id
         self.name = str(agent_id)
@@ -116,19 +118,21 @@ class MprWorld:
             number_of_agents,
             radius,
             np_random,
-            graph=None
+            seed=9,
+            graph=None,
+            is_scripted=False
     ):
         self.messages_transmitted = 0
         self.num_agents = number_of_agents
         self.radius = radius
-        self.graph = nx.random_geometric_graph(n=number_of_agents,
-                                               radius=radius) if graph is None else graph
+        self.graph = create_connected_graph(n=self.num_agents, radius=self.radius, seed=seed) if graph is None else graph
+        self.is_scripted = is_scripted
         self.random_structure = False if graph else True
-        self.agents = [MprAgent(i, nx.ego_graph(self.graph, i, undirected=True))
+
+        self.agents = [MprAgent(i, nx.ego_graph(self.graph, i, undirected=True), is_scripted=is_scripted)
                        for i in range(number_of_agents)]
-        self.num_agents = number_of_agents
         self.np_random = np_random
-        self.reset()
+        self.reset(seed)
 
     # return all agents controllable by external policies
     @property
@@ -191,9 +195,11 @@ class MprWorld:
         else:
             logging.debug(f"Agent {agent.name} could not send")
 
-    def reset(self):
+    def reset(self, seed):
         if self.random_structure:
-            self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
+            self.graph = create_connected_graph(n=self.num_agents, radius=self.radius, seed=seed)
+
+        self.messages_transmitted = 0
 
         for agent in self.agents:
             agent.state.received_from = np.zeros(self.num_agents)
@@ -234,16 +240,27 @@ class MprWorld:
 
             agent.allowed_actions = allowed_actions_mask
 
-        random_agent = self.np_random.choice(self.agents)
+        random_agent = self.np_random.choice(self.agents) if self.random_structure else self.agents[0]
         random_agent.state.message_origin = 1
 
 
-def create_connected_graph(n, radius):
+def create_connected_graph(n, radius, seed):
     while True:
-        graph = nx.random_geometric_graph(n=n, radius=radius)
+        graph = nx.random_geometric_graph(n=n, radius=radius, seed=seed)
         if nx.is_connected(graph):
             break
         else:
             logging.debug("Generated graph not connected, retry")
 
     return graph
+
+
+def load_testing_graph(path="testing_graph.gpickle"):
+    with open(path, "rb") as input_file:
+        graph = pickle.load(input_file)
+    return graph
+
+
+def save_testing_graph(graph, path="testing_graph.gpickle"):
+    with open(path, "wb") as output_file:
+        pickle.dump(graph, output_file)

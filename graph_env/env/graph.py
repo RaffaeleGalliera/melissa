@@ -33,14 +33,16 @@ class GraphEnv(AECEnv):
             radius=RADIUS_OF_INFLUENCE,
             max_cycles=50,
             device='cuda',
+            graph=None,
             render_mode=None,
-            local_ratio=None
+            local_ratio=None,
+            seed=9
     ):
         super().__init__()
         pygame.init()
         self.game_font = pygame.freetype.Font(None, 24)
         self.np_random = None
-        self.seed(9)
+        self.seed(seed)
         self.device = device
 
         self.render_mode = render_mode
@@ -54,9 +56,11 @@ class GraphEnv(AECEnv):
         self.local_ratio = local_ratio
         self.radius = radius
 
-        self.world = MprWorld(number_of_agents=number_of_agents,
+        self.world = MprWorld(graph=graph,
+                              number_of_agents=number_of_agents,
                               radius=radius,
-                              np_random=self.np_random)
+                              np_random=self.np_random,
+                              seed=seed)
 
         # Needs to be a string for assertions check in tianshou
         self.agents = [agent.name for agent in self.world.agents]
@@ -70,7 +74,7 @@ class GraphEnv(AECEnv):
         self.steps = 0
         self.current_actions = [None] * self.num_agents
 
-        self.reset(seed=9)
+        self.reset(seed=seed)
 
         # set spaces
         self.action_spaces = dict()
@@ -182,7 +186,7 @@ class GraphEnv(AECEnv):
                 message_x_pos = self.width * 0.05
                 message_y_pos = self.height * 0.95 - (self.height * 0.05 * text_line)
                 self.game_font.render_to(
-                   self.screen, (message_x_pos, message_y_pos), message, (0, 0, 0)
+                   self.screen, (message_x_pos, message_y_pos), message, (0, 0, 0), bgcolor=entity_color
                 )
                 text_line += 1
 
@@ -249,7 +253,7 @@ class GraphEnv(AECEnv):
         self.agent_selection = self._agent_selector.reset()
         self.steps = 0
 
-        self.world.reset()
+        self.world.reset(seed=seed)
         self.current_actions = [None] * self.num_agents
 
     def step(self, action):
@@ -329,7 +333,7 @@ class GraphEnv(AECEnv):
                 continue
             if sum(other_agent.state.received_from):
                 accumulated += 1
-        completion = accumulated / len(self.world.agents) if accumulated > 0 else 0
+        completion = accumulated / len(self.world.agents)
         logging.debug(f"Agent {agent.name} received : {- 1 + completion}")
         return (- 1 + completion) * self.world.messages_transmitted
 
