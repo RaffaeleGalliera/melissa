@@ -1,7 +1,7 @@
 import pytest
 import networkx as nx
 from gymnasium.utils import seeding
-from graph_env.env.utils.core import MprAgent, MprWorld, MprAgentState
+from graph_env.env.utils.core import Agent, MprWorld, State
 import numpy as np
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def graph():
 
 @pytest.fixture
 def agent_state():
-    state = MprAgentState()
+    state = State()
     state.received_from = [0, 0, 0, 0]
     state.transmitted_to = [0, 0, 0, 0]
     state.relays_for = [0, 0, 0, 0]
@@ -39,7 +39,7 @@ def agent_state():
 # Factory as a fixture paradigm
 @pytest.fixture
 def relaying_agent_state():
-    def _relaying_agent_state(state: MprAgentState,
+    def _relaying_agent_state(state: State,
                               relays_for: list,
                               received_from: list):
         state.relays_for = relays_for
@@ -54,9 +54,9 @@ def relaying_agent_state():
 @pytest.fixture
 def agent():
     def _agent(state, graph):
-        return MprAgent(agent_id=0,
-                        local_view=nx.ego_graph(graph, 0, undirected=True),
-                        state=state)
+        return Agent(agent_id=0,
+                     local_view=nx.ego_graph(graph, 0, undirected=True),
+                     state=state)
     return _agent
 
 

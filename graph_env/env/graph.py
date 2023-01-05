@@ -13,12 +13,11 @@ from pettingzoo.utils import wrappers, agent_selector
 import numpy as np
 from tianshou.data.batch import Batch
 
-from .utils.wrappers.multi_discrete_to_discrete import MultiDiscreteToDiscreteWrapper
-
 from .utils.constants import RADIUS_OF_INFLUENCE, NUMBER_OF_AGENTS
-from .utils.core import MprAgent, MprWorld, BinaryWorld
+from .utils.core import Agent, MprWorld, World
 
 import matplotlib.pyplot as plt
+
 
 class GraphEnv(AECEnv):
     metadata = {
@@ -62,7 +61,7 @@ class GraphEnv(AECEnv):
         self.local_ratio = local_ratio
         self.radius = radius
 
-        self.world = BinaryWorld(graph=graph,
+        self.world = World(graph=graph,
                                  number_of_agents=number_of_agents,
                                  radius=radius,
                                  np_random=self.np_random,
@@ -211,7 +210,6 @@ class GraphEnv(AECEnv):
 
         nx.draw(self.world.graph, node_color=color_map, pos=pos, with_labels=True)
         plt.pause(.001)
-
 
     def close(self):
         if self.renderOn:

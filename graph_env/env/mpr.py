@@ -5,7 +5,7 @@ import os
 import pygame
 
 import gymnasium
-import networkx
+import networkx as nx
 import torch
 from gymnasium.utils import seeding
 from pettingzoo import AECEnv
@@ -17,59 +17,69 @@ from .utils.wrappers.multi_discrete_to_discrete import MultiDiscreteToDiscreteWr
 
 from .utils.constants import RADIUS_OF_INFLUENCE
 from .utils.constants import NUMBER_OF_AGENTS
-from .utils.core import MprAgent, MprWorld
+from .utils.core import Agent, MprWorld
+
+from .graph import GraphEnv
+
+import matplotlib.pyplot as plt
 
 
-class GraphEnv(AECEnv):
+class MprEnv(GraphEnv):
     metadata = {
         'render_modes': ["human"],
-        'name': "graph_environment",
+        'name': "mpr_environment",
         'is_parallelizable': True
     }
 
     def __init__(
             self,
-            number_of_agents=NUMBER_OF_AGENTS,
-            radius=RADIUS_OF_INFLUENCE,
-            max_cycles=50,
+            number_of_agents=10,
+            radius=10,
+            max_cycles=100,
             device='cuda',
             graph=None,
             render_mode=None,
             local_ratio=None,
-            seed=9
+            seed=9,
+            py_game=False
     ):
         super().__init__()
-        pygame.init()
-        self.game_font = pygame.freetype.Font(None, 24)
+        self.py_game = py_game
+
+        if self.py_game:
+            pygame.init()
+            self.game_font = pygame.freetype.Font(None, 24)
+            self.viewer = None
+            self.width = 1024
+            self.height = 1024
+            self.screen = pygame.Surface([self.width, self.height])
+            self.max_size = 1
+            plt.ion()
+            plt.show()
+
         self.np_random = None
         self.seed(seed)
         self.device = device
 
         self.render_mode = render_mode
-        self.viewer = None
-        self.width = 700
-        self.height = 700
-        self.screen = pygame.Surface([self.width, self.height])
-        self.max_size = 1
         self.renderOn = False
-
         self.local_ratio = local_ratio
         self.radius = radius
 
         self.world = MprWorld(graph=graph,
-                              number_of_agents=number_of_agents,
-                              radius=radius,
-                              np_random=self.np_random,
-                              seed=seed)
+                           number_of_agents=number_of_agents,
+                           radius=radius,
+                           np_random=self.np_random,
+                           seed=seed)
 
         # Needs to be a string for assertions check in tianshou
         self.agents = [agent.name for agent in self.world.agents]
         self.possible_agents = self.agents[:]
         self.agent_name_mapping = dict(
-            zip(self.possible_agents, list(range(len(self.possible_agents))))
+            zip(self.possible_agents,
+                list(range(len(self.possible_agents))))
         )
         self._agent_selector = agent_selector(self.agents)
-
         self.max_cycles = max_cycles
         self.steps = 0
         self.current_actions = [None] * self.num_agents
@@ -82,24 +92,19 @@ class GraphEnv(AECEnv):
 
         actions_dim = np.zeros(NUMBER_OF_AGENTS)
         actions_dim.fill(2)
-        state_dim = 0
+
         for agent in self.world.agents:
             obs_dim = len(self.observe(agent.name)['observation'])
+            mask_dim = len(self.observe(agent.name)['action_mask'])
 
             self.action_spaces[agent.name] = gymnasium.spaces.MultiDiscrete(self.num_agents)
             self.observation_spaces[agent.name] = {
-                    'observation': gymnasium.spaces.Box(low=0, high=self.num_agents, shape=(obs_dim, )),
-                    'action_mask': gymnasium.spaces.Box(low=0, high=1,
-                                              shape=(self.num_agents,),
-                                              dtype=np.int8)
+                'observation': gymnasium.spaces.Box(low=0, high=np.inf,
+                                                    shape=(obs_dim,)),
+                'action_mask': gymnasium.spaces.Box(low=0, high=1,
+                                                    shape=(mask_dim,),
+                                                    dtype=np.int8)
             }
-
-        self.state_space = gymnasium.spaces.Box(
-            low=0,
-            high=self.num_agents,
-            shape=(state_dim, ),
-            dtype=np.int8
-        )
 
     def enable_render(self, mode="human"):
         if not self.renderOn and mode == "human":
@@ -175,7 +180,7 @@ class GraphEnv(AECEnv):
                 self.screen, (x, y), message, (0, 0, 0)
             )
 
-            if isinstance(agent, MprAgent):
+            if isinstance(agent, Agent):
                 if np.all(agent.state.relayed_by == 0):
                     word = "_"
                 else:
@@ -189,36 +194,6 @@ class GraphEnv(AECEnv):
                    self.screen, (message_x_pos, message_y_pos), message, (0, 0, 0), bgcolor=entity_color
                 )
                 text_line += 1
-
-    def close(self):
-        if self.renderOn:
-            pygame.event.pump()
-            pygame.display.quit()
-            self.renderOn = False
-
-    def observation_space(self, agent) -> gymnasium.spaces.Space:
-        return self.observation_spaces[agent]
-
-    def action_space(self, agent) -> gymnasium.spaces.Space:
-        return self.action_spaces[agent]
-
-    def seed(self, seed=None):
-        self.np_random, seed = seeding.np_random(seed)
-
-    def observe(self, agent: str):
-        return self.observation(
-            self.world.agents[self.agent_name_mapping[agent]]
-        )
-
-    def state(self):
-        states = tuple(
-            self.observation(
-                self.world.agents[self.agent_name_mapping[agent]]
-            )
-            for agent in self.possible_agents
-        )
-
-        return np.concatenate(states, axis=None)
 
     def observation(self, agent):
         agent_observation = agent.geometric_data
@@ -240,102 +215,11 @@ class GraphEnv(AECEnv):
 
         return agent_observation_with_mask
 
-    def reset(self, seed=9, return_info=False, options=None):
-        if seed is not None:
-            self.seed(seed=seed)
-
-        self.agents = self.possible_agents[:]
-        self.rewards = {name: 0.0 for name in self.agents}
-        self._cumulative_rewards = {name: 0.0 for name in self.agents}
-        self.terminations = {name: False for name in self.agents}
-        self.truncations = {name: False for name in self.agents}
-        self.infos = {name: {} for name in self.agents}
-        self.agent_selection = self._agent_selector.reset()
-        self.steps = 0
-
-        self.world.reset(seed=seed)
-        self.current_actions = [None] * self.num_agents
-
-    def step(self, action):
-        if(
-            self.terminations[self.agent_selection]
-            or self.truncations[self.agent_selection]
-        ):
-            self._was_dead_step(action)
-            return
-
-        current_agent = self.agent_selection
-        current_idx = self.agent_name_mapping[self.agent_selection]
-        next_idx = (current_idx + 1) % self.num_agents
-        self.agent_selection = self._agent_selector.next()
-
-        self.current_actions[current_idx] = action
-
-        if next_idx == 0:
-            self._execute_world_step()
-            self.steps += 1
-            if self.steps >= self.max_cycles:
-                for a in self.agents:
-                    self.truncations[a] = True
-        else:
-            self._clear_rewards()
-
-        self._cumulative_rewards[current_agent] = 0
-        self._accumulate_rewards()
-
-        if self.render_mode == 'human':
-            self.render()
-
-        n_received = sum([1 for agent in self.world.agents if
-                          sum(agent.state.received_from) or agent.state.message_origin])
-        if n_received == NUMBER_OF_AGENTS:
-            logging.debug(
-                f"Every agent has received the message, terminating in {self.steps}, messages transmitted: {self.world.messages_transmitted}")
-            for agent in self.agents:
-                self.terminations[agent] = True
-
-    def _execute_world_step(self):
-        for i, agent in enumerate(self.world.agents):
-            action = self.current_actions[i]
-            scenario_action = [action]
-            self._set_action(scenario_action, agent, self.action_spaces[agent.name])
-
-        self.world.step()
-
-        global_reward = 0.0
-        # TODO: exp with local ratio
-        if self.local_ratio is not None:
-            pass
-            # global_reward = float(self.global_reward())
-
-        for agent in self.world.agents:
-            agent_reward = float(self.reward(agent))
-            if self.local_ratio is not None:
-                reward = (
-                    global_reward * (1 - self.local_ratio)
-                    + agent_reward * self.local_ratio
-                )
-            else:
-                reward = agent_reward
-
-            self.rewards[agent.name] = reward
-
     def _set_action(self, action, agent, param):
         agent.action = np.zeros((self.num_agents,))
         agent.action = action[0]
         action = action[1:]
         assert len(action) == 0
-
-    def reward(self, agent):
-        accumulated = 0
-        for other_agent in self.world.agents:
-            if other_agent is agent:
-                continue
-            if sum(other_agent.state.received_from):
-                accumulated += 1
-        completion = accumulated / len(self.world.agents)
-        logging.debug(f"Agent {agent.name} received : {- 1 + completion}")
-        return (- 1 + completion) * self.world.messages_transmitted
 
 
 def make_env(raw_env):
@@ -349,4 +233,4 @@ def make_env(raw_env):
     return env
 
 
-env = make_env(GraphEnv)
+env = make_env(MprEnv)
