@@ -28,12 +28,12 @@ class GraphEnv(AECEnv):
 
     def __init__(
             self,
+            graph=None,
+            render_mode=None,
             number_of_agents=10,
             radius=10,
             max_cycles=100,
             device='cuda',
-            graph=None,
-            render_mode=None,
             local_ratio=None,
             seed=9,
             py_game=False
@@ -62,10 +62,11 @@ class GraphEnv(AECEnv):
         self.radius = radius
 
         self.world = World(graph=graph,
-                                 number_of_agents=number_of_agents,
-                                 radius=radius,
-                                 np_random=self.np_random,
-                                 seed=seed)
+                           number_of_agents=number_of_agents,
+                           radius=radius,
+                           np_random=self.np_random,
+                           seed=seed,
+                           is_scripted=False)
 
         # Needs to be a string for assertions check in tianshou
         self.agents = [agent.name for agent in self.world.agents]

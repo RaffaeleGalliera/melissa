@@ -41,9 +41,9 @@ class MprEnv(GraphEnv):
             render_mode=None,
             local_ratio=None,
             seed=9,
-            py_game=False
+            py_game=True
     ):
-        super().__init__()
+        super(AECEnv).__init__()
         self.py_game = py_game
 
         if self.py_game:
@@ -67,10 +67,11 @@ class MprEnv(GraphEnv):
         self.radius = radius
 
         self.world = MprWorld(graph=graph,
-                           number_of_agents=number_of_agents,
-                           radius=radius,
-                           np_random=self.np_random,
-                           seed=seed)
+                              number_of_agents=number_of_agents,
+                              radius=radius,
+                              np_random=self.np_random,
+                              seed=seed,
+                              is_scripted=False)
 
         # Needs to be a string for assertions check in tianshou
         self.agents = [agent.name for agent in self.world.agents]
@@ -92,12 +93,11 @@ class MprEnv(GraphEnv):
 
         actions_dim = np.zeros(NUMBER_OF_AGENTS)
         actions_dim.fill(2)
-
         for agent in self.world.agents:
             obs_dim = len(self.observe(agent.name)['observation'])
             mask_dim = len(self.observe(agent.name)['action_mask'])
 
-            self.action_spaces[agent.name] = gymnasium.spaces.MultiDiscrete(self.num_agents)
+            self.action_spaces[agent.name] = gymnasium.spaces.MultiDiscrete(actions_dim)
             self.observation_spaces[agent.name] = {
                 'observation': gymnasium.spaces.Box(low=0, high=np.inf,
                                                     shape=(obs_dim,)),

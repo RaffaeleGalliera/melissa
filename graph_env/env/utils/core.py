@@ -22,7 +22,7 @@ def mpr_heuristic(one_hop_neighbours_ids,
     mpr = np.zeros(len(one_hop_neighbours_ids))
 
     for neighbor in local_view.neighbors(agent_id):
-        clean_neighbor_neighbors = local_view.nodes[neighbor]['features'].copy()
+        clean_neighbor_neighbors = local_view.nodes[neighbor]['one_hop'].copy()
         # Exclude from the list the 2hop neighbours already reachable by self
         clean_neighbor_neighbors[agent_id] = 0
         for index in [i for i, x in enumerate(one_hop_neighbours_ids) if
@@ -49,7 +49,7 @@ def mpr_heuristic(one_hop_neighbours_ids,
         reachability = dict()
         for neighbor in local_view.neighbors(agent_id):
             reachability[int(local_view.nodes[neighbor]['label'])] = sum(
-                local_view.nodes[neighbor]['features'].astype(int) & reachable_uncovered.astype(int))
+                local_view.nodes[neighbor]['one_hop'].astype(int) & reachable_uncovered.astype(int))
         max_reachability = [k for k, v in reachability.items() if v == max(reachability.values())]
         if len(max_reachability) == 1:
             key_to_add = max_reachability[0]
@@ -57,7 +57,7 @@ def mpr_heuristic(one_hop_neighbours_ids,
             reachable_uncovered = np.array([
                 0 if (value_n and value_unc) else value_unc for
                 value_n, value_unc in
-                zip(local_view.nodes[key_to_add]['features'], reachable_uncovered)])
+                zip(local_view.nodes[key_to_add]['one_hop'], reachable_uncovered)])
 
         elif len(max_reachability) > 1:
             key_to_add = max({k: d_y[k] for k in max_reachability})
@@ -65,7 +65,7 @@ def mpr_heuristic(one_hop_neighbours_ids,
             reachable_uncovered = np.array([
                 0 if (value_n and value_unc) else value_unc for
                 value_n, value_unc in
-                zip(local_view.nodes[key_to_add]['features'], reachable_uncovered)])
+                zip(local_view.nodes[key_to_add]['one_hop'], reachable_uncovered)])
 
     return mpr
 
@@ -101,7 +101,9 @@ class Agent:
         self.two_hop_neighbours_ids = None
         self.allowed_actions = None
         self.action = None
-        self.action_callback = mpr_heuristic if is_scripted else None
+        self.is_scripted = is_scripted
+        self.action_callback = mpr_heuristic if self.is_scripted else None
+        self.suppl_mpr = None
 
     def reset(self, local_view, pos):
         self.__init__(agent_id=self.id, local_view=local_view, state=self.state, pos=pos)
@@ -131,8 +133,7 @@ class World:
         self.graph = create_connected_graph(n=self.num_agents, radius=self.radius, seed=seed) if graph is None else graph
         self.is_scripted = is_scripted
         self.random_structure = False if graph else True
-
-        self.agents = [Agent(i, nx.ego_graph(self.graph, i, undirected=True), is_scripted=is_scripted)
+        self.agents = [Agent(i, nx.ego_graph(self.graph, i, undirected=True), is_scripted=self.is_scripted)
                        for i in range(number_of_agents)]
         self.np_random = np_random
         self.reset(seed)
@@ -152,10 +153,23 @@ class World:
     def step(self):
         # set actions for scripted agents
         for agent in self.scripted_agents:
-            agent.action = agent.action_callback(agent.one_hop_neighbours_ids,
+            agent.suppl_mpr = agent.action_callback(agent.one_hop_neighbours_ids,
                                                  agent.two_hop_neighbours_ids,
                                                  agent.id,
                                                  agent.local_view)
+            relay_indices = [i for i, x in
+                             enumerate(agent.suppl_mpr) if
+                             x == 1]
+
+            for index in relay_indices:
+                self.agents[index].state.relays_for[agent.id] = 1
+
+        for agent in self.scripted_agents:
+            if (agent.has_received_from_relayed_node() or agent.state.message_origin) \
+                    and not sum(agent.state.transmitted_to):
+                agent.action = 1
+            else:
+                agent.action = 0
 
         # Send message
         for agent in self.agents:

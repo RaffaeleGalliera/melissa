@@ -90,7 +90,8 @@ class TestMprWorld:
 
         world.update_agent_state(world.agents[0])
         assert world.agents[1].state.received_from[0]
-        assert world.messages_transmitted == 1
+        # Count origin message as well
+        assert world.messages_transmitted == 2
 
     def test_update_agent_state_message_origin(self, world, graph):
         world = world(graph)

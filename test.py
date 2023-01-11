@@ -2,6 +2,7 @@ import pprint
 
 import pytest
 from main import get_args, train_agent, watch
+import mpr
 import torch.multiprocessing as mp
 
 # @pytest.mark.skip(reason="runtime too long and unstable result")
