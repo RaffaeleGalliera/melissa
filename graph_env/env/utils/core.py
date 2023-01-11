@@ -78,6 +78,12 @@ class State:
         self.relayed_by = None
         self.message_origin = 0
 
+    def reset(self, num_agents):
+        self.received_from = np.zeros(num_agents)
+        self.transmitted_to = np.zeros(num_agents)
+        self.relays_for = np.zeros(num_agents)
+        self.relayed_by = np.zeros(num_agents)
+        self.message_origin = 0
 
 class Agent:
     def __init__(self,
@@ -205,12 +211,7 @@ class World:
         self.origin_agent = random_agent.id
 
         for agent in self.agents:
-            agent.state.received_from = np.zeros(self.num_agents)
-            agent.state.transmitted_to = np.zeros(self.num_agents)
-            agent.state.relays_for = np.zeros(self.num_agents)
-            agent.state.relayed_by = np.zeros(self.num_agents)
-            agent.state.message_origin = 0
-
+            agent.state.reset(self.num_agents)
             one_hop_neighbours_ids = np.zeros(self.num_agents)
 
             for agent_index in self.graph.neighbors(agent.id):
@@ -292,11 +293,7 @@ class MprWorld(World):
         self.messages_transmitted = 1
 
         for agent in self.agents:
-            agent.state.received_from = np.zeros(self.num_agents)
-            agent.state.transmitted_to = np.zeros(self.num_agents)
-            agent.state.relays_for = np.zeros(self.num_agents)
-            agent.state.relayed_by = np.zeros(self.num_agents)
-            agent.state.message_origin = 0
+            agent.state.reset(self.num_agents)
 
             one_hop_neighbours_ids = np.zeros(self.num_agents)
             for agent_index in self.graph.neighbors(agent.id):
