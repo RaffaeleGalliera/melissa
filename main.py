@@ -27,28 +27,31 @@ from torch_geometric.nn import GCNConv
 
 os.environ["SDL_VIDEODRIVER"]="x11"
 
-
+DEVICE = 'cuda'
 class GCN(nn.Module):
     def __init__(self, state_shape, action_shape):
         super(GCN, self).__init__()
         self.action_shape = action_shape
-        self.conv1 = GCNConv(NUMBER_OF_FEATURES, 128).to('cuda')
-        # self.prebuilt_net = Net(128, 2, [128, 128], device='cuda').to('cuda')
+        self.conv1 = GCNConv(NUMBER_OF_FEATURES, 128).to(DEVICE)
+        # self.prebuilt_net = Net(128, 2, [128, 128], device=DEVICE).to(DEVICE)
         self.lin2 = nn.Linear(128, 128)
-        self.lin3 = nn.Linear(128, 2)
+        self.lin3 = nn.Linear(128, 128)
+        self.logits = nn.Linear(128, 2)
 
     def forward(self, obs, state=None, info={}):
         logits = []
         for observation in obs.observation:
             # TODO: Need here we move tensors to CUDA, cannot just put it in Batch because of data time -> slows down
-            x = torch.Tensor(observation[2]).to(device='cuda', dtype=torch.float32)
-            edge_index = torch.Tensor(observation[0]).to(device='cuda', dtype=torch.long)
+            x = torch.Tensor(observation[2]).to(device=DEVICE, dtype=torch.float32)
+            edge_index = torch.Tensor(observation[0]).to(device=DEVICE, dtype=torch.long)
             x = self.conv1(x, edge_index)
             x = x.relu()
             x = self.lin2(x)
             x = x.relu()
-            x = torch.nn.functional.dropout(x, training=self.training)
             x = self.lin3(x)
+            x = x.relu()
+            x = torch.nn.functional.dropout(x, training=self.training)
+            x = self.logits(x)
             logits.append(x[observation[3]].flatten())
         logits = torch.stack(logits)
         return logits, state
@@ -64,7 +67,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--gamma', type=float, default=0.9, help='a smaller gamma favors earlier win'
     )
-    parser.add_argument('--n-step', type=int, default=1)
+    parser.add_argument('--n-step', type=int, default=10)
     parser.add_argument('--target-update-freq', type=int, default=4)
     parser.add_argument('--epoch', type=int, default=100)
     parser.add_argument('--step-per-epoch', type=int, default=1000)
@@ -142,7 +145,7 @@ def get_agents(
         net = GCN(
             args.state_shape,
             args.action_shape,
-        ).to(device=args.device)
+        ).to(DEVICE)
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
@@ -175,7 +178,7 @@ def train_agent(
     optims: Optional[List[torch.optim.Optimizer]] = None,
 ) -> Tuple[dict, BasePolicy]:
     train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph('testing_graph_100.gpickle'), render_mode='human') for _ in range(args.test_num)])
+    test_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human') for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -245,7 +248,7 @@ def train_agent(
 def watch(
     args: argparse.Namespace = get_args(), policy: Optional[BasePolicy] = None
 ) -> None:
-    env = SubprocVectorEnv([lambda: get_env(render_mode="human")])
+    env = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human')])
     if not policy:
         warnings.warn(
             "watching random agents, as loading pre-trained policies is "

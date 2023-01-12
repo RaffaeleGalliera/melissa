@@ -32,7 +32,7 @@ class GraphEnv(AECEnv):
             render_mode=None,
             number_of_agents=10,
             radius=10,
-            max_cycles=100,
+            max_cycles=5,
             device='cuda',
             local_ratio=None,
             seed=9,
@@ -79,7 +79,7 @@ class GraphEnv(AECEnv):
         self.steps = 0
         self.current_actions = [None] * self.num_agents
 
-        self.reset(seed=seed)
+        self.reset()
 
         # set spaces
         self.action_spaces = dict()
@@ -226,6 +226,7 @@ class GraphEnv(AECEnv):
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
+        np.random.seed(seed)
 
     def observe(self, agent: str):
         return self.observation(
@@ -278,7 +279,7 @@ class GraphEnv(AECEnv):
         self.agent_selection = self._agent_selector.reset()
         self.steps = 0
 
-        self.world.reset(seed=seed)
+        self.world.reset()
         self.current_actions = [None] * self.num_agents
 
     def step(self, action):
@@ -290,6 +291,7 @@ class GraphEnv(AECEnv):
             return
 
         current_agent = self.agent_selection
+        # current_idx is the agent's index
         current_idx = self.agent_name_mapping[self.agent_selection]
         next_idx = (current_idx + 1) % self.num_agents
         self.agent_selection = self._agent_selector.next()
@@ -351,10 +353,8 @@ class GraphEnv(AECEnv):
 
     def reward(self, agent):
         accumulated = 0
-        for other_agent in self.world.agents:
-            if other_agent is agent:
-                continue
-            if sum(other_agent.state.received_from):
+        for agent in self.world.agents:
+            if sum(agent.state.received_from) or agent.state.message_origin:
                 accumulated += 1
         completion = accumulated / len(self.world.agents)
         logging.debug(f"Agent {agent.name} received : {- 1 + completion}")

@@ -1,7 +1,7 @@
 import argparse
 import os
 import warnings
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Sequence
 
 import gym
 import numpy as np
@@ -13,11 +13,11 @@ from torch.utils.tensorboard import SummaryWriter
 from tianshou.data import Collector, VectorReplayBuffer
 from tianshou.env import SubprocVectorEnv, DummyVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
-from tianshou.policy import BasePolicy, MultiAgentPolicyManager, DQNPolicy
+from tianshou.policy import BasePolicy, MultiAgentPolicyManager, DQNPolicy, BranchingDQNPolicy
 from tianshou.trainer import onpolicy_trainer, offpolicy_trainer
 from tianshou.utils import TensorboardLogger
 from tianshou.utils.net.continuous import ActorProb, Critic
-from tianshou.utils.net.common import Net
+from tianshou.utils.net.common import Net, BranchingNet, ModuleType
 
 from graph_env import mpr_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
@@ -27,33 +27,40 @@ from torch_geometric.nn import GCNConv
 
 os.environ["SDL_VIDEODRIVER"]="x11"
 
-
-class GCN(nn.Module):
-    def __init__(self, state_shape, action_shape):
-        super(GCN, self).__init__()
-        self.action_shape = action_shape
-        self.conv1 = GCNConv(NUMBER_OF_AGENTS, 128)
-        # self.conv1 = GCNConv(NUMBER_OF_FEATURES, 128)
-        self.lin2 = nn.Linear(128, 128)
-        self.lin3 = nn.Linear(128, np.prod(action_shape))
-        # self.lin3 = nn.Linear(128, 2)
+DEVICE = 'cuda'
+class BranchingGCN(BranchingNet):
+    def __init__(
+            self,
+            state_shape: Union[int, Sequence[int]],
+            num_branches: int = 0,
+            action_per_branch: int = 2,
+            common_hidden_sizes: List[int] = [],
+            value_hidden_sizes: List[int] = [],
+            action_hidden_sizes: List[int] = [],
+            norm_layer: Optional[ModuleType] = None,
+            activation: Optional[ModuleType] = nn.ReLU,
+            device: Union[str, int, torch.device] = "cpu",
+    ) -> None:
+        super().__init__(state_shape, num_branches, action_per_branch, common_hidden_sizes, value_hidden_sizes, action_hidden_sizes, norm_layer, activation, device)
+        self.conv1 = GCNConv(NUMBER_OF_FEATURES, 128)
 
     def forward(self, obs, state=None, info={}):
         logits = []
         for observation in obs.observation:
             # TODO: Need here we move tensors to CUDA, cannot just put it in Batch because of data time -> slows down
-            x = torch.Tensor(observation[2]).to(device='cuda', dtype=torch.float32)
-            edge_index = torch.Tensor(observation[0]).to(device='cuda', dtype=torch.long)
+            x = torch.Tensor(observation[2]).to(device=DEVICE, dtype=torch.float32)
+            edge_index = torch.Tensor(observation[0]).to(device=DEVICE, dtype=torch.long)
             x = self.conv1(x, edge_index)
             x = x.relu()
-            x = self.lin2(x)
-            x = x.relu()
-            x = torch.nn.functional.dropout(x, training=self.training)
-            x = self.lin3(x)
+            # x = self.lin2(x)
+            # x = x.relu()
+            # x = torch.nn.functional.dropout(x, training=self.training)
+            # x = self.lin3(x)
             logits.append(x[observation[3]].flatten())
         logits = torch.stack(logits)
+        logits = super().forward(logits)
 
-        return logits, state
+        return logits
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -76,7 +83,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument('--update-per-step', type=float, default=0.1)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--hidden-sizes', type=int, nargs='*', default=[128, 128, 128, 128])
-    parser.add_argument('--training-num', type=int, default=1)
+    parser.add_argument('--training-num', type=int, default=5)
     parser.add_argument('--test-num', type=int, default=1)
     parser.add_argument('--logdir', type=str, default='log')
 
@@ -132,7 +139,7 @@ def get_agents(
     observation_space = env.observation_space['observation'] if isinstance(
         env.observation_space, gym.spaces.Dict
     ) else env.observation_space
-    args.state_shape = observation_space['observation'].shape or observation_space['observation'].n
+    args.state_shape = observation_space.shape or observation_space.n
     args.action_shape = env.action_space.shape or env.action_space.n
     args.max_action = 1
 
@@ -141,10 +148,7 @@ def get_agents(
         optims = []
 
         # model
-        net = GCN(
-            args.state_shape,
-            args.action_shape,
-        ).to(device=args.device)
+        net = BranchingGCN(128, NUMBER_OF_AGENTS, 2, [512, 256], [128], [128], device=DEVICE).to(DEVICE)
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
@@ -152,11 +156,10 @@ def get_agents(
 
         dist = torch.distributions.Categorical
 
-        agent = DQNPolicy(
+        agent = BranchingDQNPolicy(
             net,
             optim,
             args.gamma,
-            args.n_step,
             target_update_freq=args.target_update_freq
         )
 
@@ -176,8 +179,8 @@ def train_agent(
     agents: Optional[List[BasePolicy]] = None,
     optims: Optional[List[torch.optim.Optimizer]] = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = DummyVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = DummyVectorEnv([lambda: get_env(graph=load_testing_graph('testing_graph_100.gpickle'), render_mode='human') for _ in range(args.test_num)])
+    train_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle")) for _ in range(args.training_num)])
+    test_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human') for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -226,19 +229,19 @@ def train_agent(
         policy,
         train_collector,
         test_collector,
-        args.epoch,
-        args.step_per_epoch,
-        args.repeat_per_collect,
-        args.test_num,
-        args.batch_size,
+        max_epoch=10,
+        step_per_epoch=10000,
+        step_per_collect=10,
+        episode_per_test=100,
+        batch_size=64,
         train_fn=train_fn,
         test_fn=test_fn,
-        stop_fn=stop_fn,
-        update_per_step=args.update_per_step,
+        # stop_fn=lambda mean_rewards: mean_rewards < -2,
+        update_per_step=0.1,
         test_in_train=True,
         save_best_fn=save_best_fn,
-        logger=logger,
-        resume_from_log=args.resume
+        logger=logger
+        # resume_from_log=args.resume
     )
 
     return result, policy
@@ -247,7 +250,7 @@ def train_agent(
 def watch(
     args: argparse.Namespace = get_args(), policy: Optional[BasePolicy] = None
 ) -> None:
-    env = SubprocVectorEnv([lambda: get_env(render_mode="human")])
+    env = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human')])
     if not policy:
         warnings.warn(
             "watching random agents, as loading pre-trained policies is "

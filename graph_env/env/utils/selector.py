@@ -2,7 +2,7 @@ from pettingzoo.utils import agent_selector
 
 
 # UNUSED To be finished
-class MprSelector:
+class CustomSelector:
     """Outputs an agent in the given order whenever agent_select is called.
 
     Can reinitialize to a new order
@@ -38,7 +38,7 @@ class MprSelector:
         return self.selected_agent == self.selectable[0].name
 
     def __eq__(self, other):
-        if not isinstance(other, MprSelector):
+        if not isinstance(other, CustomSelector):
             return NotImplemented
 
         return (

@@ -35,13 +35,13 @@ class MprEnv(GraphEnv):
             self,
             number_of_agents=10,
             radius=10,
-            max_cycles=100,
+            max_cycles=5,
             device='cuda',
             graph=None,
             render_mode=None,
             local_ratio=None,
             seed=9,
-            py_game=True
+            py_game=False
     ):
         super(AECEnv).__init__()
         self.py_game = py_game
@@ -57,7 +57,6 @@ class MprEnv(GraphEnv):
             plt.ion()
             plt.show()
 
-        self.np_random = None
         self.seed(seed)
         self.device = device
 
@@ -85,7 +84,7 @@ class MprEnv(GraphEnv):
         self.steps = 0
         self.current_actions = [None] * self.num_agents
 
-        self.reset(seed=seed)
+        self.reset()
 
         # set spaces
         self.action_spaces = dict()
@@ -95,41 +94,16 @@ class MprEnv(GraphEnv):
         actions_dim.fill(2)
         for agent in self.world.agents:
             obs_dim = len(self.observe(agent.name)['observation'])
-            mask_dim = len(self.observe(agent.name)['action_mask'])
 
             self.action_spaces[agent.name] = gymnasium.spaces.MultiDiscrete(actions_dim)
-            self.observation_spaces[agent.name] = {
-                'observation': gymnasium.spaces.Box(low=0, high=np.inf,
-                                                    shape=(obs_dim,)),
-                'action_mask': gymnasium.spaces.Box(low=0, high=1,
-                                                    shape=(mask_dim,),
-                                                    dtype=np.int8)
-            }
+            self.observation_spaces[agent.name] = gymnasium.spaces.Box(low=0, high=np.inf, shape=(obs_dim,))
 
     def enable_render(self, mode="human"):
         if not self.renderOn and mode == "human":
             self.screen = pygame.display.set_mode(self.screen.get_size())
             self.renderOn = True
 
-    def render(self):
-        if self.render_mode is None:
-            gymnasium.logger.warn(
-                "You are calling render method without specifying any render mode."
-            )
-            return
-
-        self.enable_render(self.render_mode)
-        observation = np.array(pygame.surfarray.pixels3d(self.screen))
-        if self.render_mode == "human" and self.world.agents:
-            self.draw()
-            pygame.display.flip()
-        return (
-            np.transpose(observation, axes=(1, 0, 2))
-            if self.render_mode == "rgb_array"
-            else None
-        )
-
-    def draw(self):
+    def draw(self, enable_aoi=False):
         # clear screen
         self.screen.fill((255, 255, 255))
 
@@ -203,17 +177,13 @@ class MprEnv(GraphEnv):
         edge_index = np.asarray(agent_observation.edge_index, dtype=np.int32)
         features = np.asarray(agent_observation.features, dtype=np.float32)
         labels = np.asarray(agent_observation.label, dtype=object)
+
         data = Batch.stack([Batch(observation=edge_index),
                             Batch(observation=labels),
                             Batch(observation=features),
                             Batch(observation=np.where(labels == agent.id))])
 
-        agent_observation_with_mask = {
-            "observation": data,
-            "action_mask": agent.allowed_actions
-        }
-
-        return agent_observation_with_mask
+        return data
 
     def _set_action(self, action, agent, param):
         agent.action = np.zeros((self.num_agents,))
@@ -225,8 +195,8 @@ class MprEnv(GraphEnv):
 def make_env(raw_env):
     def env(**kwargs):
         env = raw_env(**kwargs)
-        env = MultiDiscreteToDiscreteWrapper(env)
-        env = wrappers.AssertOutOfBoundsWrapper(env)
+        # env = MultiDiscreteToDiscreteWrapper(env)
+        # env = wrappers.AssertOutOfBoundsWrapper(env)
         env = wrappers.OrderEnforcingWrapper(env)
         return env
 

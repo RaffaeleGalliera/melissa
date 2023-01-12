@@ -85,6 +85,7 @@ class State:
         self.relayed_by = np.zeros(num_agents)
         self.message_origin = 0
 
+
 class Agent:
     def __init__(self,
                  agent_id,
@@ -126,7 +127,7 @@ class World:
             number_of_agents,
             radius,
             np_random,
-            seed=9,
+            seed=None,
             graph=None,
             is_scripted=False
     ):
@@ -136,13 +137,13 @@ class World:
 
         self.num_agents = number_of_agents
         self.radius = radius
-        self.graph = create_connected_graph(n=self.num_agents, radius=self.radius, seed=seed) if graph is None else graph
+        self.graph = create_connected_graph(n=self.num_agents, radius=self.radius) if graph is None else graph
         self.is_scripted = is_scripted
         self.random_structure = False if graph else True
         self.agents = [Agent(i, nx.ego_graph(self.graph, i, undirected=True), is_scripted=self.is_scripted)
                        for i in range(number_of_agents)]
         self.np_random = np_random
-        self.reset(seed)
+        self.reset(seed=seed)
 
     # return all agents controllable by external policies
     @property
@@ -200,9 +201,9 @@ class World:
         else:
             logging.debug(f"Agent {agent.name} could not send")
 
-    def reset(self, seed):
+    def reset(self, seed=None):
         if self.random_structure:
-            self.graph = create_connected_graph(n=self.num_agents, radius=self.radius, seed=seed)
+            self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
 
         # Includes origin message
         self.messages_transmitted = 1
@@ -217,7 +218,7 @@ class World:
             for agent_index in self.graph.neighbors(agent.id):
                 one_hop_neighbours_ids[agent_index] = 1
             self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
-            self.graph.nodes[agent.id]['features'] = np.append(one_hop_neighbours_ids, [sum(one_hop_neighbours_ids), self.origin_agent])
+            self.graph.nodes[agent.id]['features'] = np.append(one_hop_neighbours_ids, [sum(one_hop_neighbours_ids), self.origin_agent, self.graph.nodes[agent.id]['pos'][0], self.graph.nodes[agent.id]['pos'][1]])
             self.graph.nodes[agent.id]['label'] = agent.id
 
         actions_dim = np.ones(2)
@@ -255,7 +256,9 @@ class MprWorld(World):
 
     def set_relays(self, agent):
         if agent.action is not None:
-            agent.state.relayed_by = agent.action
+            # TODO: Limit to the ones that are actually neighbours (at the moment)
+            for index, value in enumerate(agent.action):
+                agent.state.relayed_by[index] = value if agent.one_hop_neighbours_ids[index] else 0
 
             neighbour_indices = [i for i, x in
                                  enumerate(agent.one_hop_neighbours_ids) if
@@ -263,7 +266,7 @@ class MprWorld(World):
             relay_indices = [i for i, x in enumerate(agent.state.relayed_by)
                              if x == 1]
             # Assert relays are subset of one hope neighbours of the agent
-            assert (set(relay_indices) <= set(neighbour_indices))
+            # assert (set(relay_indices) <= set(neighbour_indices))
             for index, value in enumerate(agent.state.relayed_by):
                 self.agents[index].state.relays_for[agent.id] = value
 
@@ -285,20 +288,29 @@ class MprWorld(World):
         else:
             logging.debug(f"Agent {agent.name} could not send")
 
-    def reset(self, seed):
+    def reset(self, seed=None):
         if self.random_structure:
-            self.graph = create_connected_graph(n=self.num_agents, radius=self.radius, seed=seed)
+            self.graph = create_connected_graph(n=self.num_agents,
+                                                radius=self.radius)
 
         # Includes origin message
         self.messages_transmitted = 1
+        random_agent = self.np_random.choice(
+            self.agents) if self.random_structure else self.agents[0]
+        self.origin_agent = random_agent.id
 
         for agent in self.agents:
             agent.state.reset(self.num_agents)
-
             one_hop_neighbours_ids = np.zeros(self.num_agents)
+
             for agent_index in self.graph.neighbors(agent.id):
                 one_hop_neighbours_ids[agent_index] = 1
-            self.graph.nodes[agent.id]['features'] = one_hop_neighbours_ids
+            self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
+            self.graph.nodes[agent.id]['features'] = np.append(
+                one_hop_neighbours_ids,
+                [sum(one_hop_neighbours_ids), self.origin_agent,
+                 self.graph.nodes[agent.id]['pos'][0],
+                 self.graph.nodes[agent.id]['pos'][1]])
             self.graph.nodes[agent.id]['label'] = agent.id
 
         actions_dim = np.zeros(self.num_agents)
@@ -306,34 +318,19 @@ class MprWorld(World):
         for agent in self.agents:
             agent.reset(local_view=nx.ego_graph(self.graph, agent.id, undirected=True),
                         pos=self.graph.nodes[agent.id]['pos'])
-            agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['features']
+            agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['one_hop']
             agent.two_hop_neighbours_ids = np.zeros(self.num_agents)
             for agent_index in self.graph.neighbors(agent.id):
-                agent.two_hop_neighbours_ids = self.graph.nodes[agent_index]['features'].astype(int) | agent.two_hop_neighbours_ids.astype(int)
+                agent.two_hop_neighbours_ids = self.graph.nodes[agent_index]['one_hop'].astype(int) | agent.two_hop_neighbours_ids.astype(int)
             agent.two_hop_neighbours_ids[agent.id] = 0
 
-            # Calc every combination of the agent's neighbours to get allowed actions
-            neighbours_combinations = list(itertools.product([0, 1], repeat=int(sum(agent.one_hop_neighbours_ids))))
-            indices = [i for i, x in enumerate(agent.one_hop_neighbours_ids) if x == 1]
-
-            allowed_actions_mask = [False] * 2**self.num_agents
-            for element in neighbours_combinations:
-                allowed_action_binary = [0] * self.num_agents
-                for i in range(len(element)):
-                    allowed_action_binary[indices[i]] = element[i]
-
-                res = int("".join(str(x) for x in allowed_action_binary), 2)
-                allowed_actions_mask[res] = True
-
-            agent.allowed_actions = allowed_actions_mask
-
-        random_agent = self.np_random.choice(self.agents) if self.random_structure else self.agents[0]
         random_agent.state.message_origin = 1
 
 
-def create_connected_graph(n, radius, seed):
+# TODO: investigate randomness
+def create_connected_graph(n, radius):
     while True:
-        graph = nx.random_geometric_graph(n=n, radius=radius, seed=seed)
+        graph = nx.random_geometric_graph(n=n, radius=radius)
         if nx.is_connected(graph):
             break
         else:
