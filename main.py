@@ -1,9 +1,11 @@
 import argparse
 import os
+import pprint
 import warnings
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import gym
+import gymnasium
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,11 +13,11 @@ from torch.distributions import Independent, Normal
 from torch.utils.tensorboard import SummaryWriter
 
 from tianshou.data import Collector, VectorReplayBuffer
-from tianshou.env import SubprocVectorEnv, DummyVectorEnv
+from tianshou.env import ShmemVectorEnv, DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
 from tianshou.policy import BasePolicy, MultiAgentPolicyManager, DQNPolicy
 from tianshou.trainer import onpolicy_trainer, offpolicy_trainer
-from tianshou.utils import TensorboardLogger
+from tianshou.utils import TensorboardLogger, WandbLogger
 from tianshou.utils.net.continuous import ActorProb, Critic
 from tianshou.utils.net.common import Net
 
@@ -23,49 +25,21 @@ from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
 from graph_env.env.utils.core import load_testing_graph
 
-from torch_geometric.nn import GCNConv
+from graph_env.network_policies.networks import GATNetwork
 
 os.environ["SDL_VIDEODRIVER"]="x11"
 
-DEVICE = 'cuda'
-class GCN(nn.Module):
-    def __init__(self, state_shape, action_shape):
-        super(GCN, self).__init__()
-        self.action_shape = action_shape
-        self.conv1 = GCNConv(NUMBER_OF_FEATURES, 128).to(DEVICE)
-        # self.prebuilt_net = Net(128, 2, [128, 128], device=DEVICE).to(DEVICE)
-        self.lin2 = nn.Linear(128, 128)
-        self.lin3 = nn.Linear(128, 128)
-        self.logits = nn.Linear(128, 2)
-
-    def forward(self, obs, state=None, info={}):
-        logits = []
-        for observation in obs.observation:
-            # TODO: Need here we move tensors to CUDA, cannot just put it in Batch because of data time -> slows down
-            x = torch.Tensor(observation[2]).to(device=DEVICE, dtype=torch.float32)
-            edge_index = torch.Tensor(observation[0]).to(device=DEVICE, dtype=torch.long)
-            x = self.conv1(x, edge_index)
-            x = x.relu()
-            x = self.lin2(x)
-            x = x.relu()
-            x = self.lin3(x)
-            x = x.relu()
-            x = torch.nn.functional.dropout(x, training=self.training)
-            x = self.logits(x)
-            logits.append(x[observation[3]].flatten())
-        logits = torch.stack(logits)
-        return logits, state
-
+DEVICE = 'cpu'
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--seed', type=int, default=1626)
-    parser.add_argument('--eps-test', type=float, default=0.05)
-    parser.add_argument('--eps-train', type=float, default=0.003)
-    parser.add_argument('--buffer-size', type=int, default=500000)
-    parser.add_argument('--lr', type=float, default=5e-4)
+    parser.add_argument('--seed', type=int, default=9)
+    parser.add_argument('--eps-test', type=float, default=0.01)
+    parser.add_argument('--eps-train', type=float, default=0.73)
+    parser.add_argument('--buffer-size', type=int, default=100000)
+    parser.add_argument('--lr', type=float, default=0.013)
     parser.add_argument(
-        '--gamma', type=float, default=0.9, help='a smaller gamma favors earlier win'
+        '--gamma', type=float, default=0.99, help='a smaller gamma favors earlier win'
     )
     parser.add_argument('--n-step', type=int, default=10)
     parser.add_argument('--target-update-freq', type=int, default=4)
@@ -77,7 +51,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument('--update-per-step', type=float, default=0.1)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--hidden-sizes', type=int, nargs='*', default=[128, 128, 128, 128])
-    parser.add_argument('--training-num', type=int, default=5)
+    parser.add_argument('--training-num', type=int, default=8)
     parser.add_argument('--test-num', type=int, default=1)
     parser.add_argument('--logdir', type=str, default='log')
 
@@ -91,20 +65,6 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu'
     )
-    # ppo special
-    parser.add_argument('--vf-coef', type=float, default=0.25)
-    parser.add_argument('--ent-coef', type=float, default=0.0)
-    parser.add_argument('--eps-clip', type=float, default=0.2)
-    parser.add_argument('--max-grad-norm', type=float, default=0.5)
-    parser.add_argument('--gae-lambda', type=float, default=0.95)
-    parser.add_argument('--rew-norm', type=int, default=1)
-    parser.add_argument('--dual-clip', type=float, default=None)
-    parser.add_argument('--value-clip', type=int, default=1)
-    parser.add_argument('--norm-adv', type=int, default=1)
-    parser.add_argument('--recompute-adv', type=int, default=0)
-    parser.add_argument('--resume', action="store_true")
-    parser.add_argument("--save-interval", type=int, default=4)
-    parser.add_argument('--render', type=float, default=0.1)
 
     return parser
 
@@ -131,9 +91,9 @@ def get_agents(
 ) -> Tuple[BasePolicy, List[torch.optim.Optimizer], List]:
     env = get_env()
     observation_space = env.observation_space['observation'] if isinstance(
-        env.observation_space, gym.spaces.Dict
+        env.observation_space, (gym.spaces.Dict, gymnasium.spaces.Dict)
     ) else env.observation_space
-    args.state_shape = observation_space['observation'].shape or observation_space['observation'].n
+    args.state_shape = observation_space.shape or observation_space.n
     args.action_shape = env.action_space.shape or env.action_space.n
     args.max_action = 1
 
@@ -142,9 +102,12 @@ def get_agents(
         optims = []
 
         # model
-        net = GCN(
-            args.state_shape,
+        net = GATNetwork(
+            NUMBER_OF_FEATURES,
+            128,
             args.action_shape,
+            5,
+            device=DEVICE
         ).to(DEVICE)
 
         optim = torch.optim.Adam(
@@ -163,13 +126,10 @@ def get_agents(
 
         for _ in range(NUMBER_OF_AGENTS):
             agents.append(agent)
-            optims.append(optim)
 
-    policy = MultiAgentPolicyManager(
-        agents, env, action_scaling=True, action_bound_method='clip'
-    )
+    policy = MultiAgentPolicyManager(agents, env)
 
-    return policy, optims, env.agents
+    return policy, optim, env.agents
 
 
 def train_agent(
@@ -177,7 +137,7 @@ def train_agent(
     agents: Optional[List[BasePolicy]] = None,
     optims: Optional[List[torch.optim.Optimizer]] = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
+    train_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle")) for _ in range(args.training_num)])
     test_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human') for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
@@ -198,9 +158,10 @@ def train_agent(
     # train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
     log_path = os.path.join(args.logdir, 'mpr', 'dqn')
+    logger = WandbLogger(project='dancing_bees')
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
-    logger = TensorboardLogger(writer)
+    logger.load(writer)
 
     def save_best_fn(policy):
         model_save_path = os.path.join(
@@ -211,10 +172,12 @@ def train_agent(
         )
 
     def stop_fn(mean_rewards):
-        return False
+        # best -19.86
+        return mean_rewards >= -19
 
     def train_fn(epoch, env_step):
-        [agent.set_eps(args.eps_train) for agent in policy.policies.values()]
+        eps = max(args.eps_train * (1 - 5e-6) ** env_step, args.eps_test)
+        [agent.set_eps(eps) for agent in policy.policies.values()]
 
     def test_fn(epoch, env_step):
         [agent.set_eps(args.eps_test) for agent in policy.policies.values()]
@@ -227,36 +190,69 @@ def train_agent(
         policy,
         train_collector,
         test_collector,
-        args.epoch,
-        args.step_per_epoch,
-        args.repeat_per_collect,
-        args.test_num,
-        args.batch_size,
+        max_epoch=10,
+        step_per_epoch=80000,
+        step_per_collect=16,
+        episode_per_test=1,
+        batch_size=128,
         train_fn=train_fn,
         test_fn=test_fn,
-        stop_fn=stop_fn,
-        update_per_step=args.update_per_step,
-        test_in_train=True,
+        # stop_fn=stop_fn,
+        update_per_step=0.0625,
+        test_in_train=False,
         save_best_fn=save_best_fn,
-        logger=logger,
-        resume_from_log=args.resume
+        logger=logger
+        # resume_from_log=args.resume
     )
 
     return result, policy
 
 
 def watch(
-    args: argparse.Namespace = get_args(), policy: Optional[BasePolicy] = None
+    args: argparse.Namespace = get_args(),
+    policy: Optional[BasePolicy] = None
 ) -> None:
-    env = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human')])
-    if not policy:
-        warnings.warn(
-            "watching random agents, as loading pre-trained policies is "
-            "currently not supported"
-        )
-        policy, _, _ = get_agents(args)
+    env = DummyVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human')])
+
+    policy = load_policy("log/mpr/dqn/weights/policy.pth", args)
     policy.eval()
+    policy.set_eps(0.05)
+
     collector = Collector(policy, env)
-    result = collector.collect(n_episode=1, render=args.render)
+    result = collector.collect(n_episode=1)
+    pprint.pprint(result)
     rews, lens = result["rews"], result["lens"]
     print(f"Final reward: {rews[:, 0].mean()}, length: {lens.mean()}")
+
+
+def load_policy(path, args):
+    # load from existing checkpoint
+    print(f"Loading agent under {path}")
+    if os.path.exists(path):
+        # model
+        net = GATNetwork(
+            NUMBER_OF_FEATURES,
+            128,
+            2,
+            5,
+            device=DEVICE
+        ).to(DEVICE)
+
+        optim = torch.optim.Adam(
+            net.parameters(), lr=args.lr
+        )
+
+        policy = DQNPolicy(
+            net,
+            optim,
+            args.gamma,
+            args.n_step,
+            target_update_freq=args.target_update_freq
+        )
+
+        policy.load_state_dict(torch.load(path))
+        print("Successfully restore policy and optim.")
+        return policy
+    else:
+        print("Fail to restore policy and optim.")
+        exit(0)

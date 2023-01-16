@@ -120,6 +120,7 @@ class Agent:
                     zip(self.state.received_from, self.state.relays_for)])
 
 
+# In this world the agents select if they are on the MPR set or not
 class World:
     # update state of the world
     def __init__(
@@ -193,6 +194,7 @@ class World:
 
             agent.state.transmitted_to = agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
+
             neighbour_indices = [i for i, x in
                                  enumerate(agent.one_hop_neighbours_ids) if
                                  x == 1]
@@ -206,7 +208,7 @@ class World:
             self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
 
         # Includes origin message
-        self.messages_transmitted = 1
+        self.messages_transmitted = 0
         random_agent = self.np_random.choice(
             self.agents) if self.random_structure else self.agents[0]
         self.origin_agent = random_agent.id
@@ -220,6 +222,7 @@ class World:
             self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
             self.graph.nodes[agent.id]['features'] = np.append(one_hop_neighbours_ids, [sum(one_hop_neighbours_ids), self.origin_agent, self.graph.nodes[agent.id]['pos'][0], self.graph.nodes[agent.id]['pos'][1]])
             self.graph.nodes[agent.id]['label'] = agent.id
+            self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
 
         actions_dim = np.ones(2)
         for agent in self.agents:
@@ -232,97 +235,6 @@ class World:
             agent.two_hop_neighbours_ids[agent.id] = 0
 
             agent.allowed_actions = [True] * int(np.sum(actions_dim))
-
-        random_agent.state.message_origin = 1
-
-
-class MprWorld(World):
-    def step(self):
-        # set actions for scripted agents
-        for agent in self.scripted_agents:
-            agent.action = agent.action_callback(agent.one_hop_neighbours_ids,
-                                                 agent.two_hop_neighbours_ids,
-                                                 agent.id,
-                                                 agent.local_view)
-
-        # Set MPRs
-        for agent in self.agents:
-            self.set_relays(agent)
-
-        # Send message
-        for agent in self.agents:
-            logging.debug(f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}")
-            self.update_agent_state(agent)
-
-    def set_relays(self, agent):
-        if agent.action is not None:
-            # TODO: Limit to the ones that are actually neighbours (at the moment)
-            for index, value in enumerate(agent.action):
-                agent.state.relayed_by[index] = value if agent.one_hop_neighbours_ids[index] else 0
-
-            neighbour_indices = [i for i, x in
-                                 enumerate(agent.one_hop_neighbours_ids) if
-                                 x == 1]
-            relay_indices = [i for i, x in enumerate(agent.state.relayed_by)
-                             if x == 1]
-            # Assert relays are subset of one hope neighbours of the agent
-            # assert (set(relay_indices) <= set(neighbour_indices))
-            for index, value in enumerate(agent.state.relayed_by):
-                self.agents[index].state.relays_for[agent.id] = value
-
-    def update_agent_state(self, agent):
-        # if it has received from a relay node or is message origin
-        # and has not already transmitted the message
-        if (agent.has_received_from_relayed_node() or agent.state.message_origin)\
-                and not sum(agent.state.transmitted_to):
-            logging.debug(
-                f"Agent {agent.name} sending to Neighs: {agent.one_hop_neighbours_ids}")
-
-            agent.state.transmitted_to = agent.one_hop_neighbours_ids
-            self.messages_transmitted += 1
-            neighbour_indices = [i for i, x in
-                                 enumerate(agent.one_hop_neighbours_ids) if
-                                 x == 1]
-            for index in neighbour_indices:
-                self.agents[index].state.received_from[agent.id] = 1
-        else:
-            logging.debug(f"Agent {agent.name} could not send")
-
-    def reset(self, seed=None):
-        if self.random_structure:
-            self.graph = create_connected_graph(n=self.num_agents,
-                                                radius=self.radius)
-
-        # Includes origin message
-        self.messages_transmitted = 1
-        random_agent = self.np_random.choice(
-            self.agents) if self.random_structure else self.agents[0]
-        self.origin_agent = random_agent.id
-
-        for agent in self.agents:
-            agent.state.reset(self.num_agents)
-            one_hop_neighbours_ids = np.zeros(self.num_agents)
-
-            for agent_index in self.graph.neighbors(agent.id):
-                one_hop_neighbours_ids[agent_index] = 1
-            self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
-            self.graph.nodes[agent.id]['features'] = np.append(
-                one_hop_neighbours_ids,
-                [sum(one_hop_neighbours_ids), self.origin_agent,
-                 self.graph.nodes[agent.id]['pos'][0],
-                 self.graph.nodes[agent.id]['pos'][1]])
-            self.graph.nodes[agent.id]['label'] = agent.id
-
-        actions_dim = np.zeros(self.num_agents)
-        actions_dim.fill(2)
-        for agent in self.agents:
-            agent.reset(local_view=nx.ego_graph(self.graph, agent.id, undirected=True),
-                        pos=self.graph.nodes[agent.id]['pos'])
-            agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['one_hop']
-            agent.two_hop_neighbours_ids = np.zeros(self.num_agents)
-            for agent_index in self.graph.neighbors(agent.id):
-                agent.two_hop_neighbours_ids = self.graph.nodes[agent_index]['one_hop'].astype(int) | agent.two_hop_neighbours_ids.astype(int)
-            agent.two_hop_neighbours_ids[agent.id] = 0
 
         random_agent.state.message_origin = 1
 

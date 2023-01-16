@@ -1,14 +1,14 @@
 import pprint
 
 import pytest
-from main import get_args, train_agent, watch
-import mpr
+from main import get_args, train_agent, watch, load_policy
 import torch.multiprocessing as mp
 
 # @pytest.mark.skip(reason="runtime too long and unstable result")
 def test_mpr(args=get_args()):
     if args.watch:
-        watch(args)
+        policy = ("log/mpr/dqn/weights/policy.pth", args)
+        watch(args, policy)
         return
 
     result, agent = train_agent(args)
@@ -21,5 +21,5 @@ def test_mpr(args=get_args()):
 
 
 if __name__ == '__main__':
-    mp.set_start_method('spawn', force=True)
+    # mp.set_start_method('spawn', force=True)
     test_mpr(get_args())

@@ -13,10 +13,11 @@ from pettingzoo.utils import wrappers, agent_selector
 import numpy as np
 from tianshou.data.batch import Batch
 
-from .utils.constants import RADIUS_OF_INFLUENCE, NUMBER_OF_AGENTS
-from .utils.core import Agent, MprWorld, World
+from .utils.constants import RADIUS_OF_INFLUENCE, NUMBER_OF_AGENTS, NUMBER_OF_FEATURES
+from .utils.core import Agent, World
 
 import matplotlib.pyplot as plt
+import math
 
 
 class GraphEnv(AECEnv):
@@ -32,27 +33,12 @@ class GraphEnv(AECEnv):
             render_mode=None,
             number_of_agents=10,
             radius=10,
-            max_cycles=5,
+            max_cycles=15,
             device='cuda',
             local_ratio=None,
             seed=9,
-            py_game=False
     ):
         super().__init__()
-        self.py_game = py_game
-
-        if self.py_game:
-            pygame.init()
-            self.game_font = pygame.freetype.Font(None, 24)
-            self.viewer = None
-            self.width = 1024
-            self.height = 1024
-            self.screen = pygame.Surface([self.width, self.height])
-            self.max_size = 1
-            plt.ion()
-            plt.show()
-
-        self.np_random = None
         self.seed(seed)
         self.device = device
 
@@ -72,38 +58,45 @@ class GraphEnv(AECEnv):
         self.agents = [agent.name for agent in self.world.agents]
         self.possible_agents = self.agents[:]
         self.agent_name_mapping = dict(
-            zip(self.possible_agents, list(range(len(self.possible_agents))))
+            zip(self.agents, list(range(len(self.possible_agents))))
         )
         self._agent_selector = agent_selector(self.agents)
+
+        # set spaces
+        self.action_spaces = dict()
+        self.observation_spaces = dict()
+        state_dim = 0
+        for agent in self.world.agents:
+            obs_dim = NUMBER_OF_FEATURES
+            self.observation_spaces[agent.name] = gymnasium.spaces.Dict({
+                'observation': gymnasium.spaces.Box(
+                    low=0,
+                    high=100,
+                    shape=(obs_dim,),
+                    dtype=np.float32,
+                ),
+                'action_mask': gymnasium.spaces.Box(low=0, high=1, shape=(2,), dtype=np.int8),
+            })
+            state_dim += obs_dim
+            self.action_spaces[agent.name] = gymnasium.spaces.Discrete(2)
+
+        self.state_space = gymnasium.spaces.Box(
+            low=0,
+            high=100,
+            shape=(state_dim, ),
+            dtype=np.float32,
+        )
+
         self.max_cycles = max_cycles
         self.steps = 0
         self.current_actions = [None] * self.num_agents
 
         self.reset()
 
-        # set spaces
-        self.action_spaces = dict()
-        self.observation_spaces = dict()
-
-        actions_dim = np.zeros(NUMBER_OF_AGENTS)
-        actions_dim.fill(2)
-
-        for agent in self.world.agents:
-            obs_dim = len(self.observe(agent.name)['observation'])
-            mask_dim = len(self.observe(agent.name)['action_mask'])
-
-            self.action_spaces[agent.name] = gymnasium.spaces.Discrete(2)
-            self.observation_spaces[agent.name] = {
-                'observation': gymnasium.spaces.Box(low=0, high=np.inf, shape=(obs_dim, )),
-                'action_mask': gymnasium.spaces.Box(low=0, high=1,
-                                                    shape=(mask_dim,),
-                                                    dtype=np.int8)
-            }
-
+        self.np_random = None
 
     def enable_render(self, mode="human"):
         if not self.renderOn and mode == "human":
-            self.screen = pygame.display.set_mode(self.screen.get_size())
             self.renderOn = True
 
     def render(self):
@@ -113,87 +106,10 @@ class GraphEnv(AECEnv):
             )
             return
 
-        if self.py_game:
-            self.enable_render(self.render_mode)
-            observation = np.array(pygame.surfarray.pixels3d(self.screen))
-
         if self.render_mode == "human" and self.world.agents:
             self.draw_graph()
-            if self.py_game:
-                self.draw()
-                pygame.display.flip()
-        return (
-            np.transpose(observation, axes=(1, 0, 2))
-            if self.render_mode == "rgb_array"
-            else None
-        )
 
-    def draw(self, enable_aoi=False):
-        # clear screen
-        self.screen.fill((255, 255, 255))
-
-        # update bounds to center around agent
-        all_poses = [agent.pos for agent in self.world.agents]
-        cam_range = np.max(np.abs(np.array(all_poses)))
-
-        # update geometry and text positions
-        text_line = 0
-        for e, agent in enumerate(self.world.agents):
-            # geometry
-            x, y = agent.pos
-            x_influence = ((x + RADIUS_OF_INFLUENCE) / cam_range) * self.width // 2 * 0.9
-            x_influence += self.width // 2
-
-            y *= (
-                -1
-            )  # this makes the display mimic the old pyglet setup (ie. flips image)
-            x = (
-                (x / cam_range) * self.width // 2 * 0.9
-            )  # the .9 is just to keep entities from appearing "too" out-of-bounds
-            y = (y / cam_range) * self.height // 2 * 0.9
-            x += self.width // 2
-            y += self.height // 2
-
-            aoi_radius = math.dist([x, y], [x_influence, y])
-
-            if enable_aoi:
-                # Draw AoI
-                aoi_color = (0, 255, 0, 128) if sum(agent.state.transmitted_to) else (255, 0, 0, 128)
-                surface = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
-                pygame.draw.circle(surface, aoi_color, (x, y), aoi_radius)
-                self.screen.blit(surface, (0, 0))
-
-            entity_color = np.array([78, 237, 105]) if sum(agent.state.received_from) or agent.state.message_origin else agent.color
-            pygame.draw.circle(
-                self.screen, entity_color, (x, y), agent.size * 350
-            )  # 350 is an arbitrary scale factor to get pygame to render similar sizes as pyglet
-            pygame.draw.circle(
-                self.screen, (0, 0, 0), (x, y), agent.size * 350, 1
-            )  # borders
-            assert (
-                0 < x < self.width and 0 < y < self.height
-            ), f"Coordinates {(x, y)} are out of bounds."
-
-            # Draw agent name
-            # message = agent.name
-            # self.game_font.render_to(
-            #     self.screen, (x, y), message, (0, 0, 0)
-            # )
-            #
-            # if isinstance(agent, MprAgent):
-            #     if np.all(agent.state.transmitted_to == 0):
-            #         word = "_"
-            #     else:
-            #         indices = [i for i, x in enumerate(agent.state.transmitted_to) if x == 1]
-            #         word = str(indices)
-            #
-            #     message = agent.name + " Transmitted to " + word
-            #     message_x_pos = self.width * 0.05
-            #     message_y_pos = self.height * 0.95 - (self.height * 0.05 * text_line)
-            #     self.game_font.render_to(
-            #        self.screen, (message_x_pos, message_y_pos), message, (0, 0, 0), bgcolor=entity_color
-            #     )
-            #     text_line += 1
+        return
 
     def draw_graph(self):
         plt.clf()
@@ -214,8 +130,6 @@ class GraphEnv(AECEnv):
 
     def close(self):
         if self.renderOn:
-            pygame.event.pump()
-            pygame.display.quit()
             self.renderOn = False
 
     def observation_space(self, agent) -> gymnasium.spaces.Space:
@@ -250,6 +164,7 @@ class GraphEnv(AECEnv):
         # we will have shape errors in the data replay buffer
         edge_index = np.asarray(agent_observation.edge_index, dtype=np.int32)
         features = np.asarray(agent_observation.features, dtype=np.float32)
+
         labels = np.asarray(agent_observation.label, dtype=object)
         data = Batch.stack([Batch(observation=edge_index),
                             Batch(observation=labels),
@@ -301,9 +216,20 @@ class GraphEnv(AECEnv):
         if next_idx == 0:
             self._execute_world_step()
             self.steps += 1
+
             if self.steps >= self.max_cycles:
                 for a in self.agents:
                     self.truncations[a] = True
+
+            n_received = sum([1 for agent in self.world.agents if
+                              sum(agent.state.received_from) or agent.state.message_origin])
+            if n_received == NUMBER_OF_AGENTS:
+                print(
+                    f"Every agent has received the message, terminating in {self.steps}, "
+                    f"messages transmitted: {self.world.messages_transmitted}")
+                for agent in self.agents:
+                    self.terminations[agent] = True
+
             if self.render_mode == 'human':
                 self.render()
         else:
@@ -311,14 +237,6 @@ class GraphEnv(AECEnv):
 
         self._cumulative_rewards[current_agent] = 0
         self._accumulate_rewards()
-
-        n_received = sum([1 for agent in self.world.agents if
-                          sum(agent.state.received_from) or agent.state.message_origin])
-        if n_received == NUMBER_OF_AGENTS:
-            logging.debug(
-                f"Every agent has received the message, terminating in {self.steps}, messages transmitted: {self.world.messages_transmitted}")
-            for agent in self.agents:
-                self.terminations[agent] = True
 
     def _execute_world_step(self):
         for i, agent in enumerate(self.world.agents):
@@ -352,13 +270,17 @@ class GraphEnv(AECEnv):
         assert len(action) == 0
 
     def reward(self, agent):
+        ##  Negative reward
         accumulated = 0
+        alpha = 0.001
         for agent in self.world.agents:
             if sum(agent.state.received_from) or agent.state.message_origin:
                 accumulated += 1
         completion = accumulated / len(self.world.agents)
         logging.debug(f"Agent {agent.name} received : {- 1 + completion}")
-        return (- 1 + completion) * self.world.messages_transmitted
+        reward = 1 if completion == 1 else math.log(completion) - math.log(self.world.messages_transmitted)
+        # reward = - ((alpha * self.world.messages_transmitted) / accumulated)
+        return reward
 
 
 def make_env(raw_env):
