@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import os
 import pprint
 import warnings
@@ -30,32 +31,32 @@ from graph_env.env.utils.policies import MultiAgentSharedPolicy
 
 os.environ["SDL_VIDEODRIVER"]="x11"
 
-DEVICE = 'cuda'
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--seed', type=int, default=9)
-    parser.add_argument('--eps-test', type=float, default=0.01)
-    parser.add_argument('--eps-train', type=float, default=0.73)
-    parser.add_argument('--buffer-size', type=int, default=100000)
-    parser.add_argument('--lr', type=float, default=0.013)
-    parser.add_argument(
-        '--gamma', type=float, default=0.99, help='a smaller gamma favors earlier win'
-    )
-    parser.add_argument('--n-step', type=int, default=5)
-    parser.add_argument('--target-update-freq', type=int, default=320)
-    parser.add_argument('--epoch', type=int, default=100)
-    parser.add_argument('--step-per-epoch', type=int, default=1000)
-    parser.add_argument('--step-per-collect', type=int, default=30)
-    # parser.add_argument('--episode-per-collect', type=int, default=16)
-    parser.add_argument('--repeat-per-collect', type=int, default=10)
-    parser.add_argument('--update-per-step', type=float, default=0.1)
-    parser.add_argument('--batch-size', type=int, default=128)
-    parser.add_argument('--hidden-sizes', type=int, nargs='*', default=[128, 128, 128, 128])
-    parser.add_argument('--training-num', type=int, default=8)
-    parser.add_argument('--test-num', type=int, default=1)
-    parser.add_argument('--logdir', type=str, default='log')
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--eps-test", type=float, default=0.005)
+    parser.add_argument("--eps-train", type=float, default=1.)
+    parser.add_argument("--eps-train-final", type=float, default=0.05)
+    parser.add_argument("--buffer-size", type=int, default=100000)
+    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--n-step", type=int, default=3)
+    parser.add_argument("--target-update-freq", type=int, default=500)
+    parser.add_argument("--epoch", type=int, default=100)
+    parser.add_argument("--step-per-epoch", type=int, default=100000)
+    parser.add_argument("--step-per-collect", type=int, default=10)
+    parser.add_argument("--update-per-step", type=float, default=0.1)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--training-num", type=int, default=10)
+    parser.add_argument("--test-num", type=int, default=10)
+    parser.add_argument("--logdir", type=str, default="log")
+    parser.add_argument("--render", type=float, default=0.)
 
+    parser.add_argument("--num-heads", type=int, default=4)
+    parser.add_argument("--hidden-emb", type=int, default=128)
+
+    parser.add_argument("--model-name", type=str, default="best.pth")
     parser.add_argument(
         '--watch',
         default=False,
@@ -80,8 +81,6 @@ def get_env(number_of_agents=NUMBER_OF_AGENTS, radius=RADIUS_OF_INFLUENCE, graph
                            render_mode=render_mode,
                            number_of_agents=number_of_agents,
                            radius=radius)
-    # env = ss.pad_observations_v0(env)
-    # env = ss.pad_action_space_v0(env)
     return PettingZooEnv(env)
 
 
@@ -102,17 +101,15 @@ def get_agents(
         # model
         net = GATNetwork(
             NUMBER_OF_FEATURES,
-            128,
+            args.hidden_emb,
             args.action_shape,
-            4,
-            device=DEVICE
-        ).to(DEVICE)
+            args.num_heads,
+            device=args.device
+        ).to(args.device)
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
         )
-
-        dist = torch.distributions.Categorical
 
         policy = DQNPolicy(
             net,
@@ -122,14 +119,14 @@ def get_agents(
             target_update_freq=args.target_update_freq
         )
 
-    policy = MultiAgentSharedPolicy(policy, env)
+    masp_policy = MultiAgentSharedPolicy(policy, env)
 
-    return policy, optim, env.agents
+    return masp_policy, optim, env.agents
 
 
 def train_agent(
     args: argparse.Namespace = get_args(),
-    ctde_policy: BasePolicy = None,
+    masp_policy: BasePolicy = None,
     optim: torch.optim.Optimizer = None,
 ) -> Tuple[dict, BasePolicy]:
     train_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle")) for _ in range(args.training_num)])
@@ -140,105 +137,117 @@ def train_agent(
     train_envs.seed(args.seed)
     test_envs.seed(args.seed)
 
-    ctde_policy, optim, agents = get_agents(args, policy=ctde_policy, optim=optim)
+    masp_policy, optim, agents = get_agents(args, policy=masp_policy, optim=optim)
 
     # collector
     train_collector = Collector(
-        ctde_policy,
+        masp_policy,
         train_envs,
         VectorReplayBuffer(args.buffer_size, len(train_envs)),
         exploration_noise=True
     )
-    test_collector = Collector(ctde_policy, test_envs)
+    test_collector = Collector(masp_policy, test_envs)
     train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
-    log_path = os.path.join(args.logdir, 'mpr', 'dqn')
+    now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
+    log_path = os.path.join(args.logdir,'mpr', 'dqn')
     logger = WandbLogger(project='dancing_bees')
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
-    # logger = TensorboardLogger(writer)
     logger.load(writer)
+    weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights")
 
     def save_best_fn(pol):
-        model_save_path = os.path.join(
-            args.logdir, "mpr", "dqn", "weights", f"policy.pth"
+        weights_name = os.path.join(
+            f"{weights_path}", f"{now}_best.pth"
         )
+
         torch.save(
-            ctde_policy.policy.state_dict(), model_save_path
+            pol.policy.state_dict(), weights_name
         )
 
     def stop_fn(mean_rewards):
         # test_reward: 8.435232 ± 3.259243
         return mean_rewards >= 10
 
-    def train_fn(epoch, env_step):  # exp decay
-        eps = max(args.eps_train * (1 - 5e-6) ** env_step, args.eps_test)
-        ctde_policy.policy.set_eps(eps)
+    def train_fn(epoch, env_step):
+        # nature DQN setting, linear decay in the first 1M steps
+        if env_step <= 1e6:
+            eps = args.eps_train - env_step / 1e6 * \
+                (args.eps_train - args.eps_train_final)
+        else:
+            eps = args.eps_train_final
+        masp_policy.policy.set_eps(eps)
+        if env_step % 1000 == 0:
+            logger.write("train/env_step", env_step, {"train/eps": eps})
 
     def test_fn(epoch, env_step):
-        ctde_policy.policy.set_eps(args.eps_test)
+        masp_policy.policy.set_eps(args.eps_test)
 
     def reward_metric(rews):
         return rews[:, 0]
 
     # trainer
     result = offpolicy_trainer(
-        ctde_policy,
+        masp_policy,
         train_collector,
         test_collector,
-        max_epoch=100,
-        step_per_epoch=10000,
-        step_per_collect=10,
-        episode_per_test=1,
-        batch_size=64,
+        max_epoch=args.epoch,
+        step_per_epoch=args.step_per_epoch,
+        step_per_collect=args.step_per_collect,
+        episode_per_test=10,
+        batch_size=args.batch_size,
         train_fn=train_fn,
         test_fn=test_fn,
         # stop_fn=stop_fn,
-        update_per_step=0.1,
+        update_per_step=args.update_per_step,
         test_in_train=True,
         save_best_fn=save_best_fn,
         logger=logger
         # resume_from_log=args.resume
     )
 
-    model_save_path = os.path.join(
-        args.logdir, "mpr", "dqn", "weights", f"last_policy.pth"
-    )
     torch.save(
-        ctde_policy.policy.state_dict(), model_save_path
+        masp_policy.policy.state_dict(), os.path.join(f"{weights_path}", f"{now}_last.pth")
     )
 
-    return result, ctde_policy
+    return result, masp_policy
 
 
 def watch(
-    args: argparse.Namespace = get_args()
+    args: argparse.Namespace = get_args(),
+    masp_policy: BasePolicy = None,
 ) -> None:
+    weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights", f"{args.model_name}")
+
     env = DummyVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human')])
 
-    policy = load_policy("log/mpr/dqn/weights/policy.pth", args)
-    policy.eval()
-    policy.set_eps(0.05)
+    if masp_policy is None:
+        masp_policy = load_policy(weights_path, args, env)
 
-    collector = Collector(policy, env, exploration_noise=True)
+    masp_policy.policy.eval()
+    masp_policy.policy.set_eps(args.eps_test)
+
+    collector = Collector(masp_policy, env, exploration_noise=True)
     result = collector.collect(n_episode=1)
+
     pprint.pprint(result)
     rews, lens = result["rews"], result["lens"]
     print(f"Final reward: {rews[:, 0].mean()}, length: {lens.mean()}")
 
 
-def load_policy(path, args):
+def load_policy(path, args, env):
     # load from existing checkpoint
     print(f"Loading agent under {path}")
     if os.path.exists(path):
         # model
         net = GATNetwork(
             NUMBER_OF_FEATURES,
-            128,
+            args.hidden_emb,
             2,
-            5,
-            device=DEVICE
-        ).to(DEVICE)
+            args.num_heads,
+            device=args.device
+        ).to(args.device)
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
@@ -252,9 +261,11 @@ def load_policy(path, args):
             target_update_freq=args.target_update_freq
         )
 
-        policy.load_state_dict(torch.load(path))
+        masp_policy, _, _, = get_agents(args, policy, optim)
+        masp_policy.policy.load_state_dict(torch.load(path))
+
         print("Successfully restore policy and optim.")
-        return policy
+        return masp_policy
     else:
         print("Fail to restore policy and optim.")
         exit(0)
