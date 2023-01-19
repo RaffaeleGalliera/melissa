@@ -1,12 +1,8 @@
-import itertools
+import functools
 import logging
-import math
-import os
-import pygame
 
 import gymnasium
 import networkx as nx
-import torch
 from gymnasium.utils import seeding
 from pettingzoo import AECEnv
 from pettingzoo.utils import wrappers, agent_selector
@@ -15,6 +11,7 @@ from tianshou.data.batch import Batch
 
 from .utils.constants import RADIUS_OF_INFLUENCE, NUMBER_OF_AGENTS, NUMBER_OF_FEATURES
 from .utils.core import Agent, World
+from .utils.selector import CustomSelector
 
 import matplotlib.pyplot as plt
 import math
@@ -24,7 +21,7 @@ class GraphEnv(AECEnv):
     metadata = {
         'render_modes': ["human"],
         'name': "graph_environment",
-        'is_parallelizable': True
+        'is_parallelizable': False
     }
 
     def __init__(
@@ -33,7 +30,7 @@ class GraphEnv(AECEnv):
             render_mode=None,
             number_of_agents=10,
             radius=10,
-            max_cycles=15,
+            max_cycles=20,
             device='cuda',
             local_ratio=None,
             seed=9,
@@ -120,6 +117,8 @@ class GraphEnv(AECEnv):
                 color_map.append('green')
             elif self.world.agents[node].state.message_origin:
                 color_map.append('blue')
+            elif sum(self.world.agents[node].state.transmitted_to) > sum(self.world.agents[node].one_hop_neighbours_ids):
+                color_map.append('purple')
             elif sum(self.world.agents[node].state.transmitted_to):
                 color_map.append('red')
             else:
@@ -132,9 +131,11 @@ class GraphEnv(AECEnv):
         if self.renderOn:
             self.renderOn = False
 
+    @functools.lru_cache(maxsize=None)
     def observation_space(self, agent) -> gymnasium.spaces.Space:
         return self.observation_spaces[agent]
 
+    @functools.lru_cache(maxsize=None)
     def action_space(self, agent) -> gymnasium.spaces.Space:
         return self.action_spaces[agent]
 
@@ -172,7 +173,8 @@ class GraphEnv(AECEnv):
                             Batch(observation=np.where(labels == agent.id))])
 
         agent.allowed_actions[1] = True if (sum(agent.state.received_from) or agent.state.message_origin) and not sum(agent.state.transmitted_to) else False
-        agent.allowed_actions[0] = False if (agent.state.message_origin and not sum(agent.state.transmitted_to)) else True
+        # Message origin is handled before the first step, hence, there is no need to prohibit non transmission
+        agent.allowed_actions[0] = True
 
         agent_observation_with_mask = {
             "observation": data,
@@ -249,8 +251,7 @@ class GraphEnv(AECEnv):
         global_reward = 0.0
         # TODO: exp with local ratio
         if self.local_ratio is not None:
-            pass
-            # global_reward = float(self.global_reward())
+            global_reward = float(self.global_reward())
 
         for agent in self.world.agents:
             agent_reward = float(self.reward(agent))
@@ -269,7 +270,7 @@ class GraphEnv(AECEnv):
         action = action[1:]
         assert len(action) == 0
 
-    def reward(self, agent):
+    def global_reward(self):
         ##  Negative reward
         accumulated = 0
         alpha = 0.001
@@ -278,10 +279,25 @@ class GraphEnv(AECEnv):
                 accumulated += 1
         completion = accumulated / len(self.world.agents)
         logging.debug(f"Agent {agent.name} received : {- 1 + completion}")
-        reward = 1 if completion == 1 else math.log(completion) - math.log(self.world.messages_transmitted)
+        reward = 1 if completion == 1 else math.log(completion) - math.log(
+            self.world.messages_transmitted)
         # reward = - ((alpha * self.world.messages_transmitted) / accumulated)
         return reward
 
+    def reward(self, agent):
+        one_hop_neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
+        two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
+
+        one_hop_received_ratio = sum([1/(sum(self.world.agents[index].state.received_from + self.world.agents[index].state.message_origin)) for index in one_hop_neighbor_indices if sum(self.world.agents[index].state.received_from)])
+        two_hop_received_ratio = sum([1/(sum(self.world.agents[index].state.received_from + self.world.agents[index].state.message_origin)) for index in two_hop_neighbor_indices if sum(self.world.agents[index].state.received_from)])
+
+        if agent.action and (sum([1 for index in one_hop_neighbor_indices if sum(self.world.agents[index].state.received_from) - 1]) == sum(agent.one_hop_neighbours_ids)):
+            reward = -1
+        else:
+            accumulated = sum([1 for agent in self.world.agents if sum(agent.state.received_from) or agent.state.message_origin])
+            completion = accumulated / len(self.world.agents)
+            reward = completion * (1 + one_hop_received_ratio)
+        return reward
 
 def make_env(raw_env):
     def env(**kwargs):

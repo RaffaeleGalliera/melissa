@@ -19,10 +19,11 @@ class GATNetwork(nn.Module):
             x = torch.as_tensor(observation[2], device=self.device, dtype=torch.float32)
             edge_index = torch.as_tensor(observation[0], device=self.device, dtype=torch.int)
             x = self.conv1(x, edge_index)
-            x = x.view(x.size(0), -1)
+            x = x[observation[3]].view(x[observation[3]].size(0), -1)
             x = F.relu(self.fc1(x))
             x = self.fc2(x)
-            logits.append(x[observation[3]].flatten())
+            logits.append(x.flatten())
         logits = torch.stack(logits)
         return logits, state
+
 

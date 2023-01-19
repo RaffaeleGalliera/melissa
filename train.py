@@ -25,11 +25,12 @@ from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
 from graph_env.env.utils.core import load_testing_graph
 
-from graph_env.network_policies.networks import GATNetwork
+from graph_env.env.utils.networks import GATNetwork
+from graph_env.env.utils.policies import MultiAgentSharedPolicy
 
 os.environ["SDL_VIDEODRIVER"]="x11"
 
-DEVICE = 'cpu'
+DEVICE = 'cuda'
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
@@ -41,15 +42,15 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--gamma', type=float, default=0.99, help='a smaller gamma favors earlier win'
     )
-    parser.add_argument('--n-step', type=int, default=10)
-    parser.add_argument('--target-update-freq', type=int, default=4)
+    parser.add_argument('--n-step', type=int, default=5)
+    parser.add_argument('--target-update-freq', type=int, default=320)
     parser.add_argument('--epoch', type=int, default=100)
     parser.add_argument('--step-per-epoch', type=int, default=1000)
     parser.add_argument('--step-per-collect', type=int, default=30)
     # parser.add_argument('--episode-per-collect', type=int, default=16)
     parser.add_argument('--repeat-per-collect', type=int, default=10)
     parser.add_argument('--update-per-step', type=float, default=0.1)
-    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--hidden-sizes', type=int, nargs='*', default=[128, 128, 128, 128])
     parser.add_argument('--training-num', type=int, default=8)
     parser.add_argument('--test-num', type=int, default=1)
@@ -86,9 +87,9 @@ def get_env(number_of_agents=NUMBER_OF_AGENTS, radius=RADIUS_OF_INFLUENCE, graph
 
 def get_agents(
     args: argparse.Namespace = get_args(),
-    agents: Optional[List[BasePolicy]] = None,
-    optims: Optional[List[torch.optim.Optimizer]] = None,
-) -> Tuple[BasePolicy, List[torch.optim.Optimizer], List]:
+    policy: BasePolicy = None,
+    optim: torch.optim.Optimizer = None,
+) -> Tuple[BasePolicy, torch.optim.Optimizer, List]:
     env = get_env()
     observation_space = env.observation_space['observation'] if isinstance(
         env.observation_space, (gym.spaces.Dict, gymnasium.spaces.Dict)
@@ -97,16 +98,13 @@ def get_agents(
     args.action_shape = env.action_space.shape or env.action_space.n
     args.max_action = 1
 
-    if agents is None:
-        agents = []
-        optims = []
-
+    if policy is None:
         # model
         net = GATNetwork(
             NUMBER_OF_FEATURES,
             128,
             args.action_shape,
-            5,
+            4,
             device=DEVICE
         ).to(DEVICE)
 
@@ -116,7 +114,7 @@ def get_agents(
 
         dist = torch.distributions.Categorical
 
-        agent = DQNPolicy(
+        policy = DQNPolicy(
             net,
             optim,
             args.gamma,
@@ -124,18 +122,15 @@ def get_agents(
             target_update_freq=args.target_update_freq
         )
 
-        for _ in range(NUMBER_OF_AGENTS):
-            agents.append(agent)
-
-    policy = MultiAgentPolicyManager(agents, env)
+    policy = MultiAgentSharedPolicy(policy, env)
 
     return policy, optim, env.agents
 
 
 def train_agent(
     args: argparse.Namespace = get_args(),
-    agents: Optional[List[BasePolicy]] = None,
-    optims: Optional[List[torch.optim.Optimizer]] = None,
+    ctde_policy: BasePolicy = None,
+    optim: torch.optim.Optimizer = None,
 ) -> Tuple[dict, BasePolicy]:
     train_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle")) for _ in range(args.training_num)])
     test_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human') for _ in range(args.test_num)])
@@ -145,72 +140,79 @@ def train_agent(
     train_envs.seed(args.seed)
     test_envs.seed(args.seed)
 
-    policy, optim, agents = get_agents(args, agents=agents, optims=optims)
+    ctde_policy, optim, agents = get_agents(args, policy=ctde_policy, optim=optim)
 
     # collector
     train_collector = Collector(
-        policy,
+        ctde_policy,
         train_envs,
-        VectorReplayBuffer(args.buffer_size, len(train_envs))
-        # exploration_noise=True
+        VectorReplayBuffer(args.buffer_size, len(train_envs)),
+        exploration_noise=True
     )
-    test_collector = Collector(policy, test_envs)
-    # train_collector.collect(n_step=args.batch_size * args.training_num)
+    test_collector = Collector(ctde_policy, test_envs)
+    train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
     log_path = os.path.join(args.logdir, 'mpr', 'dqn')
     logger = WandbLogger(project='dancing_bees')
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
+    # logger = TensorboardLogger(writer)
     logger.load(writer)
 
-    def save_best_fn(policy):
+    def save_best_fn(pol):
         model_save_path = os.path.join(
             args.logdir, "mpr", "dqn", "weights", f"policy.pth"
         )
         torch.save(
-            policy.policies[agents[0]].state_dict(), model_save_path
+            ctde_policy.policy.state_dict(), model_save_path
         )
 
     def stop_fn(mean_rewards):
-        # best -19.86
-        return mean_rewards >= -19
+        # test_reward: 8.435232 ± 3.259243
+        return mean_rewards >= 10
 
-    def train_fn(epoch, env_step):
+    def train_fn(epoch, env_step):  # exp decay
         eps = max(args.eps_train * (1 - 5e-6) ** env_step, args.eps_test)
-        [agent.set_eps(eps) for agent in policy.policies.values()]
+        ctde_policy.policy.set_eps(eps)
 
     def test_fn(epoch, env_step):
-        [agent.set_eps(args.eps_test) for agent in policy.policies.values()]
+        ctde_policy.policy.set_eps(args.eps_test)
 
     def reward_metric(rews):
         return rews[:, 0]
 
     # trainer
     result = offpolicy_trainer(
-        policy,
+        ctde_policy,
         train_collector,
         test_collector,
-        max_epoch=10,
-        step_per_epoch=80000,
-        step_per_collect=16,
+        max_epoch=100,
+        step_per_epoch=10000,
+        step_per_collect=10,
         episode_per_test=1,
-        batch_size=128,
+        batch_size=64,
         train_fn=train_fn,
         test_fn=test_fn,
         # stop_fn=stop_fn,
-        update_per_step=0.0625,
-        test_in_train=False,
+        update_per_step=0.1,
+        test_in_train=True,
         save_best_fn=save_best_fn,
         logger=logger
         # resume_from_log=args.resume
     )
 
-    return result, policy
+    model_save_path = os.path.join(
+        args.logdir, "mpr", "dqn", "weights", f"last_policy.pth"
+    )
+    torch.save(
+        ctde_policy.policy.state_dict(), model_save_path
+    )
+
+    return result, ctde_policy
 
 
 def watch(
-    args: argparse.Namespace = get_args(),
-    policy: Optional[BasePolicy] = None
+    args: argparse.Namespace = get_args()
 ) -> None:
     env = DummyVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human')])
 
@@ -218,7 +220,7 @@ def watch(
     policy.eval()
     policy.set_eps(0.05)
 
-    collector = Collector(policy, env)
+    collector = Collector(policy, env, exploration_noise=True)
     result = collector.collect(n_episode=1)
     pprint.pprint(result)
     rews, lens = result["rews"], result["lens"]

@@ -7,11 +7,11 @@ import torch.multiprocessing as mp
 # @pytest.mark.skip(reason="runtime too long and unstable result")
 def test_mpr(args=get_args()):
     if args.watch:
-        policy = ("log/mpr/dqn/weights/policy.pth", args)
-        watch(args, policy)
+        watch(args)
         return
 
     result, agent = train_agent(args)
+
     # assert result["best_reward"] >= 30.0
 
     if __name__ == '__main__':

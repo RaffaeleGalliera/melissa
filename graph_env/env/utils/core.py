@@ -25,8 +25,7 @@ def mpr_heuristic(one_hop_neighbours_ids,
         clean_neighbor_neighbors = local_view.nodes[neighbor]['one_hop'].copy()
         # Exclude from the list the 2hop neighbours already reachable by self
         clean_neighbor_neighbors[agent_id] = 0
-        for index in [i for i, x in enumerate(one_hop_neighbours_ids) if
-                      x == 1]:
+        for index in np.where(one_hop_neighbours_ids)[0]:
             clean_neighbor_neighbors[index] = 0
         # Calculate the coverage for two hop neighbors
         for index in [i for i, x in enumerate(two_hop_neighbours_ids.astype(
@@ -165,9 +164,7 @@ class World:
                                                  agent.two_hop_neighbours_ids,
                                                  agent.id,
                                                  agent.local_view)
-            relay_indices = [i for i, x in
-                             enumerate(agent.suppl_mpr) if
-                             x == 1]
+            relay_indices = np.where(agent.suppl_mpr)[0]
 
             for index in relay_indices:
                 self.agents[index].state.relays_for[agent.id] = 1
@@ -187,19 +184,16 @@ class World:
     def update_agent_state(self, agent):
         # if it has received from a relay node or is message origin
         # and has not already transmitted the message
-        if (sum(agent.state.received_from) or agent.state.message_origin)\
-                and not sum(agent.state.transmitted_to):
+        if sum(agent.state.received_from) or agent.state.message_origin:
             logging.debug(
                 f"Agent {agent.name} sending to Neighs: {agent.one_hop_neighbours_ids}")
 
-            agent.state.transmitted_to = agent.one_hop_neighbours_ids
+            agent.state.transmitted_to += agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
 
-            neighbour_indices = [i for i, x in
-                                 enumerate(agent.one_hop_neighbours_ids) if
-                                 x == 1]
+            neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
             for index in neighbour_indices:
-                self.agents[index].state.received_from[agent.id] = agent.action
+                self.agents[index].state.received_from[agent.id] += 1
         else:
             logging.debug(f"Agent {agent.name} could not send")
 
@@ -237,7 +231,8 @@ class World:
             agent.allowed_actions = [True] * int(np.sum(actions_dim))
 
         random_agent.state.message_origin = 1
-
+        random_agent.action = 1
+        self.update_agent_state(random_agent)
 
 # TODO: investigate randomness
 def create_connected_graph(n, radius):
