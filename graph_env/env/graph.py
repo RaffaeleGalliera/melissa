@@ -295,14 +295,14 @@ class GraphEnv(AECEnv):
             reward = -1
         else:
             accumulated = sum([1 for agent in self.world.agents if sum(agent.state.received_from) or agent.state.message_origin])
-            completion = accumulated / len(self.world.agents)
+            completion = accumulated / self.world.messages_transmitted
             reward = completion * (1 + one_hop_received_ratio)
         return reward
+
 
 def make_env(raw_env):
     def env(**kwargs):
         env = raw_env(**kwargs)
-        # env = MultiDiscreteToDiscreteWrapper(env)
         env = wrappers.AssertOutOfBoundsWrapper(env)
         env = wrappers.OrderEnforcingWrapper(env)
         return env

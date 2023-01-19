@@ -11,6 +11,7 @@ except ImportError:
     PettingZooEnv = None  # type: ignore
 
 
+# TODO: contains extra overhead, reduce it
 class MultiAgentSharedPolicy(BasePolicy):
     """Multi-agent shared policy manager for MARL.
 
@@ -162,16 +163,6 @@ class MultiAgentSharedPolicy(BasePolicy):
               **kwargs: Any) -> Dict[str, Union[float, List[float]]]:
         """Dispatch the data to the policy for learning.
 
-        :return: a dict with the following contents:
-
-        ::
-
-            {
-                "agent_1/item1": item 1 of agent_1's policy.learn output
-                "agent_1/item2": item 2 of agent_1's policy.learn output
-                "agent_2/xxx": xxx
-                ...
-                "agent_n/xxx": xxx
-            }
+        :return: policy loss
         """
         return self.policy.learn(Batch.cat([batch[agent_id] for agent_id in self.agents if not batch[agent_id].is_empty()]))

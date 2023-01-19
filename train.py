@@ -167,8 +167,8 @@ def train_agent(
         )
 
     def stop_fn(mean_rewards):
-        # test_reward: 8.435232 ± 3.259243
-        return mean_rewards >= 10
+        # test_reward:  37.02
+        return mean_rewards > 37
 
     def train_fn(epoch, env_step):
         # nature DQN setting, linear decay in the first 1M steps
@@ -233,7 +233,7 @@ def watch(
 
     pprint.pprint(result)
     rews, lens = result["rews"], result["lens"]
-    print(f"Final reward: {rews[:, 0].mean()}, length: {lens.mean()}")
+    print(f"Final reward: {rews.mean()}, length: {lens.mean()}")
 
 
 def load_policy(path, args, env):
