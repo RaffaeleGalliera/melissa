@@ -9,8 +9,15 @@ class GATNetwork(nn.Module):
         super(GATNetwork, self).__init__()
         self.device = device
         self.conv1 = GATConv(input_dim, hidden_dim, num_heads)
-        self.fc1 = nn.Linear(hidden_dim * num_heads, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        self.fc_model = nn.Sequential(
+            nn.Linear(hidden_dim * num_heads, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 2),
+        )
 
     def forward(self, obs, state=None, info={}):
         logits = []
@@ -20,8 +27,7 @@ class GATNetwork(nn.Module):
             edge_index = torch.as_tensor(observation[0], device=self.device, dtype=torch.int)
             x = self.conv1(x, edge_index)
             x = x[observation[3]].view(x[observation[3]].size(0), -1)
-            x = F.relu(self.fc1(x))
-            x = self.fc2(x)
+            x = self.fc_model(x)
             logits.append(x.flatten())
         logits = torch.stack(logits)
         return logits, state

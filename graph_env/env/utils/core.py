@@ -181,6 +181,13 @@ class World:
             logging.debug(f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}")
             self.update_agent_state(agent) if agent.action else None
 
+        for agent in self.agents:
+            self.update_local_graph(agent)
+
+    def update_local_graph(self, agent):
+        agent.local_view = nx.ego_graph(self.graph, agent.id,
+                                        undirected=True)
+
     def update_agent_state(self, agent):
         # if it has received from a relay node or is message origin
         # and has not already transmitted the message
@@ -190,6 +197,16 @@ class World:
 
             agent.state.transmitted_to += agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
+
+            # Update graph
+            self.graph.nodes[agent.id]['features'] = np.concatenate((
+                agent.one_hop_neighbours_ids,
+                agent.state.transmitted_to,
+                [sum(agent.one_hop_neighbours_ids),
+                 self.origin_agent,
+                 self.graph.nodes[agent.id]['pos'][0],
+                 self.graph.nodes[agent.id]['pos'][1]])
+            )
 
             neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
             for index in neighbour_indices:
@@ -214,7 +231,14 @@ class World:
             for agent_index in self.graph.neighbors(agent.id):
                 one_hop_neighbours_ids[agent_index] = 1
             self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
-            self.graph.nodes[agent.id]['features'] = np.append(one_hop_neighbours_ids, [sum(one_hop_neighbours_ids), self.origin_agent, self.graph.nodes[agent.id]['pos'][0], self.graph.nodes[agent.id]['pos'][1]])
+            self.graph.nodes[agent.id]['features'] = np.concatenate((
+                one_hop_neighbours_ids,
+                np.zeros(self.num_agents),
+                [sum(one_hop_neighbours_ids),
+                 self.origin_agent,
+                 self.graph.nodes[agent.id]['pos'][0],
+                 self.graph.nodes[agent.id]['pos'][1]])
+            )
             self.graph.nodes[agent.id]['label'] = agent.id
             self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
 
