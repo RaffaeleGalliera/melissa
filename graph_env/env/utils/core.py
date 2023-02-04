@@ -110,6 +110,8 @@ class Agent:
         self.is_scripted = is_scripted
         self.action_callback = mpr_heuristic if self.is_scripted else None
         self.suppl_mpr = None
+        self.steps_taken = None
+        self.truncated = None
 
     def reset(self, local_view, pos):
         self.__init__(agent_id=self.id, local_view=local_view, state=self.state, pos=pos)
@@ -161,9 +163,9 @@ class World:
         # set actions for scripted agents
         for agent in self.scripted_agents:
             agent.suppl_mpr = agent.action_callback(agent.one_hop_neighbours_ids,
-                                                 agent.two_hop_neighbours_ids,
-                                                 agent.id,
-                                                 agent.local_view)
+                                                    agent.two_hop_neighbours_ids,
+                                                    agent.id,
+                                                    agent.local_view)
             relay_indices = np.where(agent.suppl_mpr)[0]
 
             for index in relay_indices:
@@ -202,10 +204,7 @@ class World:
             self.graph.nodes[agent.id]['features'] = np.concatenate((
                 agent.one_hop_neighbours_ids,
                 agent.state.transmitted_to,
-                [sum(agent.one_hop_neighbours_ids),
-                 self.origin_agent,
-                 self.graph.nodes[agent.id]['pos'][0],
-                 self.graph.nodes[agent.id]['pos'][1]])
+                [agent.steps_taken])
             )
 
             neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
@@ -234,10 +233,7 @@ class World:
             self.graph.nodes[agent.id]['features'] = np.concatenate((
                 one_hop_neighbours_ids,
                 np.zeros(self.num_agents),
-                [sum(one_hop_neighbours_ids),
-                 self.origin_agent,
-                 self.graph.nodes[agent.id]['pos'][0],
-                 self.graph.nodes[agent.id]['pos'][1]])
+                [agent.steps_taken])
             )
             self.graph.nodes[agent.id]['label'] = agent.id
             self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
@@ -253,10 +249,13 @@ class World:
             agent.two_hop_neighbours_ids[agent.id] = 0
 
             agent.allowed_actions = [True] * int(np.sum(actions_dim))
+            agent.steps_taken = 0
+            agent.truncated = False
 
         random_agent.state.message_origin = 1
         random_agent.action = 1
         self.update_agent_state(random_agent)
+
 
 # TODO: investigate randomness
 def create_connected_graph(n, radius):

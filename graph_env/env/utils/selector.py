@@ -22,8 +22,8 @@ class CustomSelector:
         return self.next()
 
     def next(self):
-        self._current_agent = (self._current_agent + 1) % len(self.agent_order)
-        self.selected_agent = self.agent_order[self._current_agent - 1]
+        self._current_agent = (self._current_agent + 1) % len(self.agent_order) if len(self.agent_order) else None
+        self.selected_agent = self.agent_order[self._current_agent - 1] if len(self.agent_order) else 0
         return self.selected_agent
 
     def is_last(self):

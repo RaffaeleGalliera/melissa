@@ -16,11 +16,12 @@ from torch.utils.tensorboard import SummaryWriter
 from tianshou.data import Collector, VectorReplayBuffer
 from tianshou.env import ShmemVectorEnv, DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
-from tianshou.policy import BasePolicy, MultiAgentPolicyManager, DQNPolicy
+from tianshou.policy import BasePolicy, MultiAgentPolicyManager, DQNPolicy, FQFPolicy
 from tianshou.trainer import onpolicy_trainer, offpolicy_trainer
 from tianshou.utils import TensorboardLogger, WandbLogger
 from tianshou.utils.net.continuous import ActorProb, Critic
 from tianshou.utils.net.common import Net
+from tianshou.utils.net.discrete import FullQuantileFunction, FractionProposalNetwork
 
 from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
@@ -29,19 +30,28 @@ from graph_env.env.utils.core import load_testing_graph
 from graph_env.env.utils.networks import GATNetwork
 from graph_env.env.utils.policies import MultiAgentSharedPolicy
 
+from graph_env.env.utils.collector import MultiAgentCollector
 os.environ["SDL_VIDEODRIVER"]="x11"
 
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=3128)
+    parser.add_argument("--scale-obs", type=int, default=0)
     parser.add_argument("--eps-test", type=float, default=0.005)
     parser.add_argument("--eps-train", type=float, default=1.)
     parser.add_argument("--eps-train-final", type=float, default=0.05)
-    parser.add_argument("--buffer-size", type=int, default=100000)
-    parser.add_argument("--lr", type=float, default=0.0001)
+    parser.add_argument("--buffer-size", type=int, default=300000)
+    parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument("--fraction-lr", type=float, default=2.5e-9)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--n-step", type=int, default=3)
+    parser.add_argument("--num-fractions", type=int, default=32)
+    parser.add_argument("--num-cosines", type=int, default=64)
+    parser.add_argument("--ent-coef", type=float, default=10.)
+    parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[512])
+    parser.add_argument("--hidden-emb", type=int, default=128)
+    parser.add_argument("--num-heads", type=int, default=4)
+    parser.add_argument("--n-step", type=int, default=4)
     parser.add_argument("--target-update-freq", type=int, default=500)
     parser.add_argument("--epoch", type=int, default=100)
     parser.add_argument("--step-per-epoch", type=int, default=100000)
@@ -52,21 +62,33 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--test-num", type=int, default=10)
     parser.add_argument("--logdir", type=str, default="log")
     parser.add_argument("--render", type=float, default=0.)
-
-    parser.add_argument("--num-heads", type=int, default=4)
-    parser.add_argument("--hidden-emb", type=int, default=128)
-
-    parser.add_argument("--model-name", type=str, default="best.pth")
     parser.add_argument(
-        '--watch',
+        "--device", type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu"
+    )
+    parser.add_argument("--frames-stack", type=int, default=4)
+    parser.add_argument("--resume-path", type=str, default=None)
+    parser.add_argument("--resume-id", type=str, default=None)
+    parser.add_argument(
+        "--logger",
+        type=str,
+        default="tensorboard",
+        choices=["tensorboard", "wandb"],
+    )
+    parser.add_argument(
+        "--watch",
         default=False,
-        action='store_true',
-        help='no training, '
-        'watch the play of pre-trained models'
+        action="store_true",
+        help="watch the play of pre-trained policy only"
     )
     parser.add_argument(
-        '--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu'
+        "--wandb",
+        default=False,
+        action="store_true",
+        help="Set WANDB logger"
     )
+    parser.add_argument("--save-buffer-name", type=str, default=None)
+    parser.add_argument("--model-name", type=str, default=None)
 
     return parser
 
@@ -98,26 +120,46 @@ def get_agents(
     args.max_action = 1
 
     if policy is None:
-        # model
-        net = GATNetwork(
+        # features
+        feature_net = GATNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
+            features_only=True,
             device=args.device
+        )
+
+        net = FullQuantileFunction(
+            feature_net,
+            args.action_shape,
+            args.hidden_sizes,
+            args.num_cosines,
+            device=args.device,
         ).to(args.device)
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
         )
 
-        policy = DQNPolicy(
+        fraction_net = FractionProposalNetwork(
+            args.num_fractions,
+            net.input_dim
+        )
+
+        fraction_optim = torch.optim.RMSprop(
+            fraction_net.parameters(), lr=args.fraction_lr
+        )
+
+        policy = FQFPolicy(
             net,
             optim,
+            fraction_net,
+            fraction_optim,
             args.gamma,
             args.n_step,
             target_update_freq=args.target_update_freq
-        )
+        ).to(args.device)
 
     masp_policy = MultiAgentSharedPolicy(policy, env)
 
@@ -129,7 +171,7 @@ def train_agent(
     masp_policy: BasePolicy = None,
     optim: torch.optim.Optimizer = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle")) for _ in range(args.training_num)])
+    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
     test_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human') for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
@@ -140,21 +182,25 @@ def train_agent(
     masp_policy, optim, agents = get_agents(args, policy=masp_policy, optim=optim)
 
     # collector
-    train_collector = Collector(
+    train_collector = MultiAgentCollector(
         masp_policy,
         train_envs,
-        VectorReplayBuffer(args.buffer_size, len(train_envs)),
+        VectorReplayBuffer(args.buffer_size,
+                           len(train_envs)),
         exploration_noise=True
     )
-    test_collector = Collector(masp_policy, test_envs)
-    train_collector.collect(n_step=args.batch_size * args.training_num)
+    test_collector = MultiAgentCollector(masp_policy, test_envs, exploration_noise=True)
+    # train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
     log_path = os.path.join(args.logdir,'mpr', 'dqn')
-    logger = WandbLogger(project='dancing_bees')
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
-    logger.load(writer)
+    if args.wandb:
+        logger = WandbLogger(project='dancing_bees', save_interval=1)
+        logger.load(writer)
+    else:
+        logger = TensorboardLogger(writer)
     weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights")
 
     def save_best_fn(pol):
@@ -167,13 +213,13 @@ def train_agent(
         )
 
     def stop_fn(mean_rewards):
-        # test_reward:  37.02
-        return mean_rewards > 37
+        # test_reward:  -4.84
+        return mean_rewards > -4.84
 
     def train_fn(epoch, env_step):
         # nature DQN setting, linear decay in the first 1M steps
-        if env_step <= 1e6:
-            eps = args.eps_train - env_step / 1e6 * \
+        if env_step <= 5e5:
+            eps = args.eps_train - env_step / 5e5 * \
                 (args.eps_train - args.eps_train_final)
         else:
             eps = args.eps_train_final
@@ -183,6 +229,7 @@ def train_agent(
 
     def test_fn(epoch, env_step):
         masp_policy.policy.set_eps(args.eps_test)
+
 
     def reward_metric(rews):
         return rews[:, 0]
@@ -195,13 +242,13 @@ def train_agent(
         max_epoch=args.epoch,
         step_per_epoch=args.step_per_epoch,
         step_per_collect=args.step_per_collect,
-        episode_per_test=10,
+        episode_per_test=args.test_num,
         batch_size=args.batch_size,
         train_fn=train_fn,
         test_fn=test_fn,
         # stop_fn=stop_fn,
         update_per_step=args.update_per_step,
-        test_in_train=True,
+        test_in_train=False,
         save_best_fn=save_best_fn,
         logger=logger
         # resume_from_log=args.resume
@@ -228,7 +275,7 @@ def watch(
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
 
-    collector = Collector(masp_policy, env, exploration_noise=True)
+    collector = MultiAgentCollector(masp_policy, env, exploration_noise=True)
     result = collector.collect(n_episode=1)
 
     pprint.pprint(result)
@@ -238,28 +285,51 @@ def watch(
 
 def load_policy(path, args, env):
     # load from existing checkpoint
+    args.action_shape = 2
+
     print(f"Loading agent under {path}")
     if os.path.exists(path):
         # model
-        net = GATNetwork(
+        # features
+        feature_net = GATNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
-            2,
+            args.action_shape,
             args.num_heads,
+            features_only=True,
             device=args.device
+        )
+
+        net = FullQuantileFunction(
+            feature_net,
+            args.action_shape,
+            args.hidden_sizes,
+            args.num_cosines,
+            device=args.device,
         ).to(args.device)
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
         )
 
-        policy = DQNPolicy(
+        fraction_net = FractionProposalNetwork(
+            args.num_fractions,
+            net.input_dim
+        )
+
+        fraction_optim = torch.optim.RMSprop(
+            fraction_net.parameters(), lr=args.fraction_lr
+        )
+
+        policy = FQFPolicy(
             net,
             optim,
+            fraction_net,
+            fraction_optim,
             args.gamma,
             args.n_step,
             target_update_freq=args.target_update_freq
-        )
+        ).to(args.device)
 
         masp_policy, _, _, = get_agents(args, policy, optim)
         masp_policy.policy.load_state_dict(torch.load(path))

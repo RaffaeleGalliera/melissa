@@ -1,17 +1,17 @@
 import pytest
 import networkx as nx
 from gymnasium.utils import seeding
-from graph_env.env.utils.core import Agent, MprWorld, State
+from graph_env.env.utils.core import Agent, World, State
 import numpy as np
 
 @pytest.fixture
 def world():
     def _world(graph):
         np_random, seed = seeding.np_random(9)
-        return MprWorld(number_of_agents=4,
-                        radius=.40,
-                        np_random=np_random,
-                        graph=graph)
+        return World(number_of_agents=4,
+                     radius=.40,
+                     np_random=np_random,
+                     graph=graph)
 
     return _world
 
@@ -60,7 +60,7 @@ def agent():
     return _agent
 
 
-class TestMprAgent:
+class TestAgent:
     # test case for agent receiving from relayed node
     def test_has_received_form_relayed_node(self,
                                             agent,
@@ -74,7 +74,7 @@ class TestMprAgent:
         assert not agent(state, graph).has_received_from_relayed_node()
 
 
-class TestMprWorld:
+class TestWorld:
     def test_set_relays(self, world, graph):
         world = world(graph)
         agent = world.agents[0]
