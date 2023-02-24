@@ -23,7 +23,7 @@ class GATNetwork(nn.Module):
                 nn.Linear(hidden_dim * num_heads, hidden_dim * num_heads),
                 nn.ReLU(inplace=True)
             )
-            self.output_dim=hidden_dim * num_heads
+            self.output_dim = hidden_dim * num_heads
 
     def forward(self, obs, state=None, info={}):
         logits = []
@@ -32,6 +32,7 @@ class GATNetwork(nn.Module):
             x = torch.as_tensor(observation[2], device=self.device, dtype=torch.float32)
             edge_index = torch.as_tensor(observation[0], device=self.device, dtype=torch.int)
             x = self.conv1(x, edge_index)
+            x = F.relu(x)
             x = x.view(x.size(0), -1)
             x = global_mean_pool(x, None)
             x = self.fc_model(x)

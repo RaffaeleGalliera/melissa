@@ -13,7 +13,7 @@ import torch.nn as nn
 from torch.distributions import Independent, Normal
 from torch.utils.tensorboard import SummaryWriter
 
-from tianshou.data import Collector, VectorReplayBuffer
+from tianshou.data import Collector, VectorReplayBuffer, PrioritizedVectorReplayBuffer
 from tianshou.env import ShmemVectorEnv, DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
 from tianshou.policy import BasePolicy, MultiAgentPolicyManager, DQNPolicy, FQFPolicy
@@ -33,31 +33,29 @@ from graph_env.env.utils.policies import MultiAgentSharedPolicy
 from graph_env.env.utils.collector import MultiAgentCollector
 os.environ["SDL_VIDEODRIVER"]="x11"
 
+import time
+
+import warnings
+warnings.filterwarnings("ignore")
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=3128)
-    parser.add_argument("--scale-obs", type=int, default=0)
-    parser.add_argument("--eps-test", type=float, default=0.005)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--eps-test", type=float, default=0.001)
     parser.add_argument("--eps-train", type=float, default=1.)
     parser.add_argument("--eps-train-final", type=float, default=0.05)
-    parser.add_argument("--buffer-size", type=int, default=300000)
-    parser.add_argument("--lr", type=float, default=5e-5)
-    parser.add_argument("--fraction-lr", type=float, default=2.5e-9)
+    parser.add_argument("--buffer-size", type=int, default=100000)
+    parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--num-fractions", type=int, default=32)
-    parser.add_argument("--num-cosines", type=int, default=64)
-    parser.add_argument("--ent-coef", type=float, default=10.)
-    parser.add_argument("--hidden-sizes", type=int, nargs="*", default=[512])
+    parser.add_argument("--n-step", type=int, default=1)
     parser.add_argument("--hidden-emb", type=int, default=128)
     parser.add_argument("--num-heads", type=int, default=4)
-    parser.add_argument("--n-step", type=int, default=4)
     parser.add_argument("--target-update-freq", type=int, default=500)
     parser.add_argument("--epoch", type=int, default=100)
     parser.add_argument("--step-per-epoch", type=int, default=100000)
     parser.add_argument("--step-per-collect", type=int, default=10)
     parser.add_argument("--update-per-step", type=float, default=0.1)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--training-num", type=int, default=10)
     parser.add_argument("--test-num", type=int, default=10)
     parser.add_argument("--logdir", type=str, default="log")
@@ -66,15 +64,8 @@ def get_parser() -> argparse.ArgumentParser:
         "--device", type=str,
         default="cuda" if torch.cuda.is_available() else "cpu"
     )
-    parser.add_argument("--frames-stack", type=int, default=4)
     parser.add_argument("--resume-path", type=str, default=None)
     parser.add_argument("--resume-id", type=str, default=None)
-    parser.add_argument(
-        "--logger",
-        type=str,
-        default="tensorboard",
-        choices=["tensorboard", "wandb"],
-    )
     parser.add_argument(
         "--watch",
         default=False,
@@ -121,41 +112,21 @@ def get_agents(
 
     if policy is None:
         # features
-        feature_net = GATNetwork(
+        net = GATNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
-            features_only=True,
             device=args.device
         )
-
-        net = FullQuantileFunction(
-            feature_net,
-            args.action_shape,
-            args.hidden_sizes,
-            args.num_cosines,
-            device=args.device,
-        ).to(args.device)
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
         )
 
-        fraction_net = FractionProposalNetwork(
-            args.num_fractions,
-            net.input_dim
-        )
-
-        fraction_optim = torch.optim.RMSprop(
-            fraction_net.parameters(), lr=args.fraction_lr
-        )
-
-        policy = FQFPolicy(
+        policy = DQNPolicy(
             net,
             optim,
-            fraction_net,
-            fraction_optim,
             args.gamma,
             args.n_step,
             target_update_freq=args.target_update_freq
@@ -164,101 +135,6 @@ def get_agents(
     masp_policy = MultiAgentSharedPolicy(policy, env)
 
     return masp_policy, optim, env.agents
-
-
-def train_agent(
-    args: argparse.Namespace = get_args(),
-    masp_policy: BasePolicy = None,
-    optim: torch.optim.Optimizer = None,
-) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human') for _ in range(args.test_num)])
-    # seed
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    train_envs.seed(args.seed)
-    test_envs.seed(args.seed)
-
-    masp_policy, optim, agents = get_agents(args, policy=masp_policy, optim=optim)
-
-    # collector
-    train_collector = MultiAgentCollector(
-        masp_policy,
-        train_envs,
-        VectorReplayBuffer(args.buffer_size,
-                           len(train_envs)),
-        exploration_noise=True
-    )
-    test_collector = MultiAgentCollector(masp_policy, test_envs, exploration_noise=True)
-    # train_collector.collect(n_step=args.batch_size * args.training_num)
-    # log
-    now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
-    log_path = os.path.join(args.logdir,'mpr', 'dqn')
-    writer = SummaryWriter(log_path)
-    writer.add_text("args", str(args))
-    if args.wandb:
-        logger = WandbLogger(project='dancing_bees', save_interval=1)
-        logger.load(writer)
-    else:
-        logger = TensorboardLogger(writer)
-    weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights")
-
-    def save_best_fn(pol):
-        weights_name = os.path.join(
-            f"{weights_path}", f"{now}_best.pth"
-        )
-
-        torch.save(
-            pol.policy.state_dict(), weights_name
-        )
-
-    def stop_fn(mean_rewards):
-        # test_reward:  -4.84
-        return mean_rewards > -4.84
-
-    def train_fn(epoch, env_step):
-        # nature DQN setting, linear decay in the first 1M steps
-        if env_step <= 5e5:
-            eps = args.eps_train - env_step / 5e5 * \
-                (args.eps_train - args.eps_train_final)
-        else:
-            eps = args.eps_train_final
-        masp_policy.policy.set_eps(eps)
-        if env_step % 1000 == 0:
-            logger.write("train/env_step", env_step, {"train/eps": eps})
-
-    def test_fn(epoch, env_step):
-        masp_policy.policy.set_eps(args.eps_test)
-
-
-    def reward_metric(rews):
-        return rews[:, 0]
-
-    # trainer
-    result = offpolicy_trainer(
-        masp_policy,
-        train_collector,
-        test_collector,
-        max_epoch=args.epoch,
-        step_per_epoch=args.step_per_epoch,
-        step_per_collect=args.step_per_collect,
-        episode_per_test=args.test_num,
-        batch_size=args.batch_size,
-        train_fn=train_fn,
-        test_fn=test_fn,
-        # stop_fn=stop_fn,
-        update_per_step=args.update_per_step,
-        test_in_train=False,
-        save_best_fn=save_best_fn,
-        logger=logger
-        # resume_from_log=args.resume
-    )
-
-    torch.save(
-        masp_policy.policy.state_dict(), os.path.join(f"{weights_path}", f"{now}_last.pth")
-    )
-
-    return result, masp_policy
 
 
 def watch(
@@ -282,6 +158,102 @@ def watch(
     rews, lens = result["rews"], result["lens"]
     print(f"Final reward: {rews.mean()}, length: {lens.mean()}")
 
+    time.sleep(100)
+
+
+def train_agent(
+    args: argparse.Namespace = get_args(),
+    masp_policy: BasePolicy = None,
+    optim: torch.optim.Optimizer = None,
+) -> Tuple[dict, BasePolicy]:
+    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
+    test_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle")) for _ in range(args.test_num)])
+    # seed
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    train_envs.seed(args.seed)
+    test_envs.seed(args.seed)
+
+    masp_policy, optim, agents = get_agents(args, policy=masp_policy, optim=optim)
+
+    # collector
+    train_collector = MultiAgentCollector(
+        masp_policy,
+        train_envs,
+        VectorReplayBuffer(args.buffer_size,
+                           len(train_envs),
+                           ignore_obs_next=True),
+        exploration_noise=True
+    )
+    test_collector = MultiAgentCollector(masp_policy, test_envs, exploration_noise=True)
+    # train_collector.collect(n_step=args.batch_size * args.training_num)
+    # log
+    now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
+    log_path = os.path.join(args.logdir, 'mpr', 'dqn')
+    logger = WandbLogger(project='dancing_bees')
+    writer = SummaryWriter(log_path)
+    writer.add_text("args", str(args))
+    logger.load(writer)
+    weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights")
+
+    def save_best_fn(pol):
+        weights_name = os.path.join(
+            f"{weights_path}", f"{now}_best.pth"
+        )
+
+        torch.save(
+            pol.policy.state_dict(), weights_name
+        )
+
+    def stop_fn(mean_rewards):
+        # test_reward:  -4.84
+        return mean_rewards > -4.84
+
+    def train_fn(epoch, env_step):
+        # nature DQN setting, linear decay in the first 1M steps
+        final_decay_step = 4e5
+        if env_step <= final_decay_step:
+            eps = args.eps_train - env_step / final_decay_step * \
+                (args.eps_train - args.eps_train_final)
+        else:
+            eps = args.eps_train_final
+        masp_policy.policy.set_eps(eps)
+        if env_step % 1000 == 0:
+            logger.write("train/env_step", env_step, {"train/eps": eps})
+
+    def test_fn(epoch, env_step):
+        masp_policy.policy.set_eps(args.eps_test)
+
+    def reward_metric(rews):
+        return rews[:, 0]
+
+    # trainer
+    result = offpolicy_trainer(
+        masp_policy,
+        train_collector,
+        test_collector,
+        max_epoch=args.epoch,
+        step_per_epoch=args.step_per_epoch,
+        step_per_collect=args.step_per_collect,
+        episode_per_test=args.test_num,
+        batch_size=args.batch_size,
+        train_fn=train_fn,
+        test_fn=test_fn,
+        # reward_metric
+        # stop_fn=stop_fn,
+        update_per_step=args.update_per_step,
+        test_in_train=False,
+        save_best_fn=save_best_fn,
+        logger=logger
+        # resume_from_log=args.resume
+    )
+
+    torch.save(
+        masp_policy.policy.state_dict(), os.path.join(f"{weights_path}", f"{now}_last.pth")
+    )
+
+    return result, masp_policy
+
 
 def load_policy(path, args, env):
     # load from existing checkpoint
@@ -291,41 +263,21 @@ def load_policy(path, args, env):
     if os.path.exists(path):
         # model
         # features
-        feature_net = GATNetwork(
+        net = GATNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
-            features_only=True,
             device=args.device
-        )
-
-        net = FullQuantileFunction(
-            feature_net,
-            args.action_shape,
-            args.hidden_sizes,
-            args.num_cosines,
-            device=args.device,
         ).to(args.device)
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr
         )
 
-        fraction_net = FractionProposalNetwork(
-            args.num_fractions,
-            net.input_dim
-        )
-
-        fraction_optim = torch.optim.RMSprop(
-            fraction_net.parameters(), lr=args.fraction_lr
-        )
-
-        policy = FQFPolicy(
+        policy = DQNPolicy(
             net,
             optim,
-            fraction_net,
-            fraction_optim,
             args.gamma,
             args.n_step,
             target_update_freq=args.target_update_freq

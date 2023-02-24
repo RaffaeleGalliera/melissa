@@ -8,10 +8,9 @@ from pettingzoo import AECEnv
 from pettingzoo.utils import wrappers, agent_selector
 import numpy as np
 from tianshou.data.batch import Batch
-from supersuit import frame_stack_v2
 from .utils.constants import RADIUS_OF_INFLUENCE, NUMBER_OF_AGENTS, NUMBER_OF_FEATURES
 from .utils.core import Agent, World
-from .utils.selector import CustomSelector
+from torch_geometric.utils import from_networkx
 
 import matplotlib.pyplot as plt
 import math
@@ -30,7 +29,7 @@ class GraphEnv(AECEnv):
             render_mode=None,
             number_of_agents=10,
             radius=10,
-            max_cycles=20,
+            max_cycles=100,
             device='cuda',
             local_ratio=None,
             seed=9,
@@ -79,13 +78,13 @@ class GraphEnv(AECEnv):
 
         self.state_space = gymnasium.spaces.Box(
             low=0,
-            high=100,
+            high=10,
             shape=(state_dim, ),
             dtype=np.float32,
         )
 
         self.max_cycles = max_cycles
-        self.steps = 0
+        self.num_moves = 0
         self.current_actions = [None] * NUMBER_OF_AGENTS
 
         self.reset()
@@ -160,6 +159,7 @@ class GraphEnv(AECEnv):
 
     def observation(self, agent):
         agent_observation = agent.geometric_data
+        one_hop_neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
 
         # Every entry needs to be wrapped in a Batch object, otherwise
         # we will have shape errors in the data replay buffer
@@ -174,7 +174,7 @@ class GraphEnv(AECEnv):
 
         agent.allowed_actions[1] = True if (sum(agent.state.received_from) or agent.state.message_origin) and not sum(agent.state.transmitted_to) else False
         # Message origin is handled before the first step, hence, there is no need to prohibit non transmission
-        agent.allowed_actions[0] = True
+        agent.allowed_actions[0] = False if sum([1 for index in one_hop_neighbor_indices if sum(self.world.agents[index].one_hop_neighbours_ids) == 1]) and not sum(agent.state.transmitted_to) else True
 
         agent_observation_with_mask = {
             "observation": data,
@@ -193,11 +193,15 @@ class GraphEnv(AECEnv):
         self.terminations = {name: False for name in self.agents}
         self.truncations = {name: False for name in self.agents}
         self.infos = {name: {} for name in self.agents}
-        self.steps = 0
+        self.num_moves = 0
+
+        self.world.reset()
+        self.agents = [agent.name for agent in self.world.agents if (
+                sum(agent.state.received_from) and not (
+                agent.truncated or agent.state.message_origin))]
 
         self._agent_selector.reinit(self.agents)
         self.agent_selection = self._agent_selector.next()
-        self.world.reset()
         self.current_actions = [None] * NUMBER_OF_AGENTS
 
     def step(self, action):
@@ -209,6 +213,7 @@ class GraphEnv(AECEnv):
             return
 
         current_agent = self.agent_selection
+
         # current_idx is the agent's index
         current_idx = self.agent_name_mapping[self.agent_selection]
         self.current_actions[current_idx] = action
@@ -216,7 +221,7 @@ class GraphEnv(AECEnv):
         self.world.agents[int(current_agent)].steps_taken += 1 if action is not None else 0
         if self._agent_selector.is_last():
             self._execute_world_step()
-            self.steps += 1
+            self.num_moves += 1
 
             for agent in self.world.agents:
                 if agent.steps_taken == 4 and not agent.truncated:
@@ -224,15 +229,19 @@ class GraphEnv(AECEnv):
                     self.terminations[agent.name] = True
 
             self.agents = [agent.name for agent in self.world.agents if (sum(agent.state.received_from) and not (agent.truncated or agent.state.message_origin))]
+            if not len(self.agents):
+                self.infos = {name: {'reset_all': True} for name in
+                              self.possible_agents}
             self._agent_selector.reinit(self.agents)
             previous_agent = self.agent_selection
             self.current_actions = [None] * NUMBER_OF_AGENTS
 
             n_received = sum([1 for agent in self.world.agents if
                               sum(agent.state.received_from) or agent.state.message_origin])
-            if n_received == NUMBER_OF_AGENTS:
+
+            if n_received == NUMBER_OF_AGENTS and self.render_mode == 'human':
                 print(
-                    f"Every agent has received the message, terminating in {self.steps}, "
+                    f"Every agent has received the message, terminating in {self.num_moves}, "
                     f"messages transmitted: {self.world.messages_transmitted}")
 
             if self.render_mode == 'human':
@@ -241,8 +250,6 @@ class GraphEnv(AECEnv):
             self._clear_rewards()
 
         self.agent_selection = self._agent_selector.next() if len(self.agents) else previous_agent
-        if not len(self.agents):
-            self.infos = {name: {'reset_all': True} for name in self.possible_agents}
         self._cumulative_rewards[current_agent] = 0
         self._accumulate_rewards()
 
@@ -259,7 +266,7 @@ class GraphEnv(AECEnv):
         if self.local_ratio is not None:
             global_reward = float(self.global_reward())
 
-        for agent in self.world.agents:
+        for agent in [a for a in self.world.agents if str(a.id) in self.agents]:
             agent_reward = float(self.reward(agent))
             if self.local_ratio is not None:
                 reward = (
@@ -293,24 +300,24 @@ class GraphEnv(AECEnv):
     def reward(self, agent):
         one_hop_neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
         two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
+        assert(set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
 
-        two_hop_received_ratio = sum([1/(sum(self.world.agents[index].state.received_from) + self.world.agents[index].state.message_origin) for index in two_hop_neighbor_indices if sum(self.world.agents[index].state.received_from) or self.world.agents[index].state.message_origin])
-        two_hop_cover = sum([1 for index in two_hop_neighbor_indices if sum(self.world.agents[index].state.received_from) or self.world.agents[index].state.message_origin])
-        one_hop_bonus = sum([1/len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if (sum(self.world.agents[index].state.received_from) == 1 and self.world.agents[index].state.received_from[agent.id])])
+        # [np.append(one_hop_neighbor_indices, agent.id)]
+        two_hop_cover = sum([1 for index in two_hop_neighbor_indices if sum(
+            list(self.world.agents[index].state.received_from[np.append(one_hop_neighbor_indices, agent.id)])) or self.world.agents[index].state.message_origin])
 
-        reward = (two_hop_cover / len(two_hop_neighbor_indices)) * \
-                 (two_hop_received_ratio / len(two_hop_neighbor_indices))
+        reward = two_hop_cover / len(two_hop_neighbor_indices)
+        # if sum(agent.state.transmitted_to):
+        #     reward = .8 * reward
+        # If all my 1 hop have transmitted already before this action give a penalty
+        if agent.action and (sum([1 for index in one_hop_neighbor_indices if sum(self.world.agents[index].state.transmitted_to)]) == sum(agent.one_hop_neighbours_ids)):
+            reward = -2
+        if agent.steps_taken == 4:
+            if two_hop_cover == len(two_hop_neighbor_indices):
+                reward += 3 if not sum(agent.state.transmitted_to) else 1
+            else:
+                reward = -2
 
-        if agent.action and (sum([1 for index in one_hop_neighbor_indices if sum(self.world.agents[index].state.received_from) - 1]) == sum(agent.one_hop_neighbours_ids)):
-            reward = -1
-        # If I send and there is at least one isolated agent
-        elif agent.action and sum([1 for index in one_hop_neighbor_indices if sum(self.world.agents[index].one_hop_neighbours_ids) == 1]):
-            reward += 10
-        elif agent.action and one_hop_bonus:
-            reward += one_hop_bonus
-        elif not agent.action and sum([1 for index in one_hop_neighbor_indices if sum(self.world.agents[index].one_hop_neighbours_ids) == 1]):
-            reward = -10
-            
         return reward
 
 

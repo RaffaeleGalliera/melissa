@@ -14,6 +14,7 @@ def mpr_heuristic(one_hop_neighbours_ids,
                   agent_id,
                   local_view
                   ):
+    two_hop_neighbours_ids = two_hop_neighbours_ids - one_hop_neighbours_ids
     d_y = dict()
     two_hop_coverage_summary = {index: [] for index, value in
                                 enumerate(two_hop_neighbours_ids) if
@@ -116,6 +117,10 @@ class Agent:
     def reset(self, local_view, pos):
         self.__init__(agent_id=self.id, local_view=local_view, state=self.state, pos=pos)
 
+    def update_local_view(self, local_view):
+        self.local_view = local_view
+        self.geometric_data = from_networkx(local_view)
+
     def has_received_from_relayed_node(self):
         return sum([received and relay for received, relay in
                     zip(self.state.received_from, self.state.relays_for)])
@@ -201,11 +206,14 @@ class World:
             self.messages_transmitted += 1
 
             # Update graph
-            self.graph.nodes[agent.id]['features'] = np.concatenate((
+            self.graph.nodes[agent.id]['features'] = np.append(
                 agent.one_hop_neighbours_ids,
-                agent.state.transmitted_to,
-                [agent.steps_taken])
+                (1 if sum(agent.state.transmitted_to) else 0, agent.action, agent.steps_taken)
             )
+
+            agent.update_local_view(
+                local_view=nx.ego_graph(self.graph, agent.id,
+                                        undirected=True))
 
             neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
             for index in neighbour_indices:
@@ -230,10 +238,9 @@ class World:
             for agent_index in self.graph.neighbors(agent.id):
                 one_hop_neighbours_ids[agent_index] = 1
             self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
-            self.graph.nodes[agent.id]['features'] = np.concatenate((
+            self.graph.nodes[agent.id]['features'] = np.append(
                 one_hop_neighbours_ids,
-                np.zeros(self.num_agents),
-                [agent.steps_taken])
+                (0, 0, 0)
             )
             self.graph.nodes[agent.id]['label'] = agent.id
             self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
@@ -243,9 +250,9 @@ class World:
             agent.reset(local_view=nx.ego_graph(self.graph, agent.id, undirected=True),
                         pos=self.graph.nodes[agent.id]['pos'])
             agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['one_hop']
-            agent.two_hop_neighbours_ids = np.zeros(self.num_agents)
+            agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids
             for agent_index in self.graph.neighbors(agent.id):
-                agent.two_hop_neighbours_ids = self.graph.nodes[agent_index]['one_hop'].astype(int) | agent.two_hop_neighbours_ids.astype(int)
+                agent.two_hop_neighbours_ids = np.logical_or(self.graph.nodes[agent_index]['one_hop'].astype(int), agent.two_hop_neighbours_ids.astype(int))
             agent.two_hop_neighbours_ids[agent.id] = 0
 
             agent.allowed_actions = [True] * int(np.sum(actions_dim))
