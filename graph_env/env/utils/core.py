@@ -186,7 +186,7 @@ class World:
         # Send message
         for agent in self.agents:
             logging.debug(f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}")
-            self.update_agent_state(agent) if agent.action else None
+            self.update_agent_state(agent)
 
         for agent in self.agents:
             self.update_local_graph(agent)
@@ -202,6 +202,7 @@ class World:
             logging.debug(
                 f"Agent {agent.name} sending to Neighs: {agent.one_hop_neighbours_ids}")
 
+        if agent.action:
             agent.state.transmitted_to += agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
 
