@@ -10,6 +10,7 @@ import numpy as np
 from tianshou.data.batch import Batch
 from .utils.constants import RADIUS_OF_INFLUENCE, NUMBER_OF_AGENTS, NUMBER_OF_FEATURES
 from .utils.core import Agent, World
+from .utils.selector import CustomSelector
 from torch_geometric.utils import from_networkx
 
 import matplotlib.pyplot as plt
@@ -56,7 +57,7 @@ class GraphEnv(AECEnv):
         self.agent_name_mapping = dict(
             zip(self.agents, list(range(len(self.possible_agents))))
         )
-        self._agent_selector = agent_selector(self.agents)
+        self._agent_selector = CustomSelector(self.agents)
 
         # set spaces
         self.action_spaces = dict()
@@ -143,6 +144,9 @@ class GraphEnv(AECEnv):
         np.random.seed(seed)
 
     def observe(self, agent: str):
+        if all(value for key, value in self.terminations.items() if
+               key in self.agents) and len(self.agents) == 1:
+            self.infos[self.agents[0]] = {'reset_all': True}
         return self.observation(
             self.world.agents[self.agent_name_mapping[agent]]
         )
@@ -188,6 +192,7 @@ class GraphEnv(AECEnv):
             self.seed(seed=seed)
 
         self.agents = self.possible_agents[:]
+        self._agent_selector.reinit(self.agents)
         self.rewards = {name: 0.0 for name in self.agents}
         self._cumulative_rewards = {name: 0.0 for name in self.agents}
         self.terminations = {name: False for name in self.agents}
@@ -196,11 +201,11 @@ class GraphEnv(AECEnv):
         self.num_moves = 0
 
         self.world.reset()
-        self.agents = [agent.name for agent in self.world.agents if (
-                sum(agent.state.received_from) and not (
-                agent.truncated or agent.state.message_origin))]
+        self.agents = [agent.name for agent in self.world.agents
+                       if (sum(agent.state.received_from) and
+                           not agent.state.message_origin)]
+        self._agent_selector.enable(self.agents)
 
-        self._agent_selector.reinit(self.agents)
         self.agent_selection = self._agent_selector.next()
         self.current_actions = [None] * NUMBER_OF_AGENTS
 
@@ -209,31 +214,38 @@ class GraphEnv(AECEnv):
             self.terminations[self.agent_selection]
             or self.truncations[self.agent_selection]
         ):
-            self._was_dead_step(action)
+            self._was_dead_step(None)
+            self._agent_selector.disable(self.agent_selection)
             return
-
         current_agent = self.agent_selection
 
         # current_idx is the agent's index
         current_idx = self.agent_name_mapping[self.agent_selection]
         self.current_actions[current_idx] = action
+        agent_tmp = self.world.agents[int(current_agent)]
+        agent_tmp.steps_taken += 1
 
-        self.world.agents[int(current_agent)].steps_taken += 1 if action is not None else 0
-        if self._agent_selector.is_last():
+        self.agent_selection = self._agent_selector.next()
+        if not self.agent_selection:
             self._execute_world_step()
             self.num_moves += 1
 
-            for agent in self.world.agents:
-                if agent.steps_taken == 4 and not agent.truncated:
-                    agent.truncated = True
-                    self.terminations[agent.name] = True
+            for agent in self.agents:
+                agent_obj = self.world.agents[int(agent)]
+                if agent_obj.steps_taken >= 4 and not agent_obj.truncated:
+                    agent_obj.truncated = True
+                    # terminations must be shifted somehow due to how the collector gathers the next obs
+                    self.terminations[agent_obj.name] = True
 
-            self.agents = [agent.name for agent in self.world.agents if (sum(agent.state.received_from) and not (agent.truncated or agent.state.message_origin))]
-            if not len(self.agents):
-                self.infos = {name: {'reset_all': True} for name in
-                              self.possible_agents}
-            self._agent_selector.reinit(self.agents)
-            previous_agent = self.agent_selection
+            self.agents = [agent.name for agent in self.world.agents
+                 if (sum(agent.state.received_from) and
+                     not agent.state.message_origin and
+                     agent.name in self.terminations)]
+            self._agent_selector.enable(self.agents)
+            self._agent_selector.new_round()
+            self.agent_selection = self._agent_selector.next()
+
+            # previous_agent = self.agent_selection
             self.current_actions = [None] * NUMBER_OF_AGENTS
 
             n_received = sum([1 for agent in self.world.agents if
@@ -249,9 +261,9 @@ class GraphEnv(AECEnv):
         else:
             self._clear_rewards()
 
-        self.agent_selection = self._agent_selector.next() if len(self.agents) else previous_agent
         self._cumulative_rewards[current_agent] = 0
         self._accumulate_rewards()
+        self._deads_step_first()
 
     def _execute_world_step(self):
         for i, agent in enumerate(self.world.agents):
@@ -303,6 +315,10 @@ class GraphEnv(AECEnv):
         assert(set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
 
         # [np.append(one_hop_neighbor_indices, agent.id)]
+        # reward = agent.gained_two_hop_cover
+        # if sum(agent.state.transmitted_to):
+        #     reward -= sum([1 for index in one_hop_neighbor_indices if (sum(self.world.agents[index].state.transmitted_to) - 1)])
+
         two_hop_cover = sum([1 for index in two_hop_neighbor_indices if sum(
             list(self.world.agents[index].state.received_from[np.append(one_hop_neighbor_indices, agent.id)])) or self.world.agents[index].state.message_origin])
 

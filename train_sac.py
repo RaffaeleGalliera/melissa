@@ -23,6 +23,13 @@ from tianshou.utils.net.continuous import ActorProb, Critic
 from tianshou.utils.net.common import Net
 from tianshou.utils.net.discrete import FullQuantileFunction, FractionProposalNetwork
 
+from tianshou.policy import DiscreteSACPolicy
+from tianshou.trainer import offpolicy_trainer
+from tianshou.utils import TensorboardLogger
+from tianshou.utils.net.common import Net
+from tianshou.utils.net.discrete import Actor, Critic
+
+
 from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
 from graph_env.env.utils.core import load_testing_graph
@@ -40,32 +47,36 @@ warnings.filterwarnings("ignore")
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--eps-test", type=float, default=0.001)
-    parser.add_argument("--eps-train", type=float, default=1.)
-    parser.add_argument("--eps-train-final", type=float, default=0.05)
+    parser.add_argument("--seed", type=int, default=4213)
+    parser.add_argument("--scale-obs", type=int, default=0)
     parser.add_argument("--buffer-size", type=int, default=100000)
-    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--actor-lr", type=float, default=1e-5)
+    parser.add_argument("--critic-lr", type=float, default=1e-5)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--n-step", type=int, default=4)
-    parser.add_argument("--hidden-emb", type=int, default=128)
-    parser.add_argument("--num-heads", type=int, default=4)
-    parser.add_argument("--target-update-freq", type=int, default=500)
-    parser.add_argument("--epoch", type=int, default=100)
+    parser.add_argument("--n-step", type=int, default=3)
+    parser.add_argument("--tau", type=float, default=0.005)
+    parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument("--auto-alpha", action="store_true", default=True)
+    parser.add_argument("--alpha-lr", type=float, default=3e-4)
+    parser.add_argument("--epoch", type=int, default=10)
     parser.add_argument("--step-per-epoch", type=int, default=100000)
     parser.add_argument("--step-per-collect", type=int, default=10)
     parser.add_argument("--update-per-step", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--hidden-size", type=int, default=128)
     parser.add_argument("--training-num", type=int, default=10)
     parser.add_argument("--test-num", type=int, default=1)
+    parser.add_argument("--rew-norm", type=int, default=False)
     parser.add_argument("--logdir", type=str, default="log")
     parser.add_argument("--render", type=float, default=0.)
+    parser.add_argument("--hidden-emb", type=int, default=128)
+    parser.add_argument("--num-heads", type=int, default=4)
+    parser.add_argument("--resume-path", type=str, default=None)
+    parser.add_argument("--resume-id", type=str, default=None)
     parser.add_argument(
         "--device", type=str,
         default="cuda" if torch.cuda.is_available() else "cpu"
     )
-    parser.add_argument("--resume-path", type=str, default=None)
-    parser.add_argument("--resume-id", type=str, default=None)
     parser.add_argument(
         "--watch",
         default=False,
@@ -117,19 +128,37 @@ def get_agents(
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
+            features_only=True,
             device=args.device
         )
 
-        optim = torch.optim.Adam(
-            net.parameters(), lr=args.lr
-        )
+        actor = Actor(net, args.action_shape, device=args.device,
+                      softmax_output=False)
+        actor_optim = torch.optim.Adam(actor.parameters(), lr=args.actor_lr)
+        critic1 = Critic(net, last_size=args.action_shape, device=args.device)
+        critic1_optim = torch.optim.Adam(critic1.parameters(),
+                                         lr=args.critic_lr)
+        critic2 = Critic(net, last_size=args.action_shape, device=args.device)
+        critic2_optim = torch.optim.Adam(critic2.parameters(), lr=args.critic_lr)
 
-        policy = DQNPolicy(
-            net,
-            optim,
+        if args.auto_alpha:
+            target_entropy = 0.98 * np.log(np.prod(args.action_shape))
+            log_alpha = torch.zeros(1, requires_grad=True, device=args.device)
+            alpha_optim = torch.optim.Adam([log_alpha], lr=args.alpha_lr)
+            args.alpha = (target_entropy, log_alpha, alpha_optim)
+
+        policy = DiscreteSACPolicy(
+            actor,
+            actor_optim,
+            critic1,
+            critic1_optim,
+            critic2,
+            critic2_optim,
+            args.tau,
             args.gamma,
-            args.n_step,
-            target_update_freq=args.target_update_freq
+            args.alpha,
+            estimation_step=args.n_step,
+            reward_normalization=args.rew_norm,
         ).to(args.device)
 
     masp_policy = MultiAgentSharedPolicy(policy, env)
@@ -151,7 +180,7 @@ def watch(
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
 
-    collector = MultiAgentCollector(masp_policy, env, exploration_noise=True, number_of_agents=20)
+    collector = MultiAgentCollector(masp_policy, env, exploration_noise=True)
     result = collector.collect(n_episode=1)
 
     pprint.pprint(result)
@@ -195,6 +224,7 @@ def train_agent(
         exploration_noise=True,
         number_of_agents=len(agents)
     )
+
     # train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
@@ -214,28 +244,6 @@ def train_agent(
             pol.policy.state_dict(), weights_name
         )
 
-    def stop_fn(mean_rewards):
-        # test_reward:  -4.84
-        return mean_rewards > -4.84
-
-    def train_fn(epoch, env_step):
-        # nature DQN setting, linear decay in the first 1M steps
-        final_decay_step = 4e5
-        if env_step <= final_decay_step:
-            eps = args.eps_train - env_step / final_decay_step * \
-                (args.eps_train - args.eps_train_final)
-        else:
-            eps = args.eps_train_final
-        masp_policy.policy.set_eps(eps)
-        if env_step % 1000 == 0:
-            logger.write("train/env_step", env_step, {"train/eps": eps})
-
-    def test_fn(epoch, env_step):
-        masp_policy.policy.set_eps(args.eps_test)
-
-    def reward_metric(rews):
-        return rews[:, 0]
-
     # trainer
     result = offpolicy_trainer(
         masp_policy,
@@ -246,10 +254,6 @@ def train_agent(
         step_per_collect=args.step_per_collect,
         episode_per_test=args.test_num,
         batch_size=args.batch_size,
-        train_fn=train_fn,
-        test_fn=test_fn,
-        # reward_metric
-        # stop_fn=stop_fn,
         update_per_step=args.update_per_step,
         test_in_train=False,
         save_best_fn=save_best_fn,
@@ -270,29 +274,49 @@ def load_policy(path, args, env):
 
     print(f"Loading agent under {path}")
     if os.path.exists(path):
-        # model
+        # features
         # features
         net = GATNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
+            features_only=True,
             device=args.device
-        ).to(args.device)
-
-        optim = torch.optim.Adam(
-            net.parameters(), lr=args.lr
         )
 
-        policy = DQNPolicy(
-            net,
-            optim,
+        actor = Actor(net, args.action_shape, device=args.device,
+                      softmax_output=False)
+        actor_optim = torch.optim.Adam(actor.parameters(), lr=args.actor_lr)
+        critic1 = Critic(net, last_size=args.action_shape, device=args.device)
+        critic1_optim = torch.optim.Adam(critic1.parameters(),
+                                         lr=args.critic_lr)
+        critic2 = Critic(net, last_size=args.action_shape, device=args.device)
+        critic2_optim = torch.optim.Adam(critic2.parameters(),
+                                         lr=args.critic_lr)
+
+        # better not to use auto alpha in CartPole
+        if args.auto_alpha:
+            target_entropy = 0.98 * np.log(np.prod(args.action_shape))
+            log_alpha = torch.zeros(1, requires_grad=True, device=args.device)
+            alpha_optim = torch.optim.Adam([log_alpha], lr=args.alpha_lr)
+            args.alpha = (target_entropy, log_alpha, alpha_optim)
+
+        policy = DiscreteSACPolicy(
+            actor,
+            actor_optim,
+            critic1,
+            critic1_optim,
+            critic2,
+            critic2_optim,
+            args.tau,
             args.gamma,
-            args.n_step,
-            target_update_freq=args.target_update_freq
+            args.alpha,
+            estimation_step=args.n_step,
+            reward_normalization=args.rew_norm,
         ).to(args.device)
 
-        masp_policy, _, _, = get_agents(args, policy, optim)
+        masp_policy, _, _, = get_agents(args, policy)
         masp_policy.policy.load_state_dict(torch.load(path))
 
         print("Successfully restore policy and optim.")

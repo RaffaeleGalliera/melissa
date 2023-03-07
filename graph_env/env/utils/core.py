@@ -106,6 +106,8 @@ class Agent:
         self.color = color
         self.one_hop_neighbours_ids = None
         self.two_hop_neighbours_ids = None
+        self.two_hop_cover = 0
+        self.gained_two_hop_cover = 0
         self.allowed_actions = None
         self.action = None
         self.is_scripted = is_scripted
@@ -125,6 +127,14 @@ class Agent:
         return sum([received and relay for received, relay in
                     zip(self.state.received_from, self.state.relays_for)])
 
+    def update_two_hop_cover(self, agents):
+        two_hop_neighbor_indices = np.where(self.two_hop_neighbours_ids)[0]
+        one_hop_neighbor_indices = np.where(self.one_hop_neighbours_ids)[0]
+
+        new_two_hop_cover = sum([1 for index in two_hop_neighbor_indices if sum(list(agents[index].state.received_from[np.append(one_hop_neighbor_indices, self.id)])) or agents[index].state.message_origin])
+        self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
+
+        self.two_hop_cover = new_two_hop_cover
 
 # In this world the agents select if they are on the MPR set or not
 class World:
@@ -198,29 +208,25 @@ class World:
     def update_agent_state(self, agent):
         # if it has received from a relay node or is message origin
         # and has not already transmitted the message
-        if sum(agent.state.received_from) or agent.state.message_origin:
-            logging.debug(
-                f"Agent {agent.name} sending to Neighs: {agent.one_hop_neighbours_ids}")
-
         if agent.action:
             agent.state.transmitted_to += agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
-
-            # Update graph
-            self.graph.nodes[agent.id]['features'] = np.append(
-                agent.one_hop_neighbours_ids,
-                (1 if sum(agent.state.transmitted_to) else 0, agent.action, agent.steps_taken)
-            )
-
-            agent.update_local_view(
-                local_view=nx.ego_graph(self.graph, agent.id,
-                                        undirected=True))
-
             neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
             for index in neighbour_indices:
                 self.agents[index].state.received_from[agent.id] += 1
-        else:
-            logging.debug(f"Agent {agent.name} could not send")
+
+        # Update graph
+        self.graph.nodes[agent.id]['features'] = np.append(
+            agent.one_hop_neighbours_ids,
+            (sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids), (1 if agent.action else 0), agent.steps_taken)
+        )
+
+        agent.update_local_view(
+            local_view=nx.ego_graph(self.graph, agent.id,
+                                    undirected=True))
+        agent.update_two_hop_cover(self.agents)
+
+
 
     def reset(self, seed=None):
         if self.random_structure:

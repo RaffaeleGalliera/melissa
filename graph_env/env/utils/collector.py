@@ -17,12 +17,56 @@ from tianshou.data import (
 from tianshou.data.batch import _alloc_by_keys_diff
 from tianshou.env import BaseVectorEnv, DummyVectorEnv
 from tianshou.policy import BasePolicy
-
+import copy
 
 from tianshou.data.collector import Collector
 
 
 class MultiAgentCollector(Collector):
+    def \
+            __init__(
+            self,
+            policy: BasePolicy,
+            env: Union[gym.Env, BaseVectorEnv],
+            buffer: Optional[ReplayBuffer] = None,
+            preprocess_fn: Optional[Callable[..., Batch]] = None,
+            exploration_noise: bool = False,
+            number_of_agents: int = 0
+    ) -> None:
+        self.number_of_agents = number_of_agents
+        self.done = np.full((len(env),), False)
+        self.next_done = np.full((len(env),), False)
+        self.to_be_reset = np.full((len(env),), False)
+        super().__init__(policy,
+                         env,
+                         buffer,
+                         preprocess_fn,
+                         exploration_noise)
+
+    def _assign_buffer(self, buffer: Optional[ReplayBuffer]) -> None:
+        """Check if the buffer matches the constraint."""
+        if buffer is None:
+            buffer = VectorReplayBuffer(self.env_num * self.number_of_agents, self.env_num * self.number_of_agents)
+        elif isinstance(buffer, ReplayBufferManager):
+            assert buffer.buffer_num >= self.env_num
+            if isinstance(buffer, CachedReplayBuffer):
+                assert buffer.cached_buffer_num >= self.env_num
+        else:  # ReplayBuffer or PrioritizedReplayBuffer
+            assert buffer.maxsize > 0
+            if self.env_num > 1:
+                if type(buffer) == ReplayBuffer:
+                    buffer_type = "ReplayBuffer"
+                    vector_type = "VectorReplayBuffer"
+                else:
+                    buffer_type = "PrioritizedReplayBuffer"
+                    vector_type = "PrioritizedVectorReplayBuffer"
+                raise TypeError(
+                    f"Cannot use {buffer_type}(size={buffer.maxsize}, ...) to collect "
+                    f"{self.env_num} envs,\n\tplease use {vector_type}(total_size="
+                    f"{buffer.maxsize}, buffer_num={self.env_num}, ...) instead."
+                )
+        self.buffer = buffer
+
     def collect(
         self,
         n_step: Optional[int] = None,
@@ -100,38 +144,83 @@ class MultiAgentCollector(Collector):
 
             # get bounded and remapped actions first (not saved into buffer)
             action_remap = self.policy.map_action(self.data.act)
-            # step in env
-            result = self.env.step(action_remap, ready_env_ids)  # type: ignore
-            if len(result) == 5:
-                obs_next, rew, terminated, truncated, info = result
-                done = np.logical_or(terminated, truncated)
-            elif len(result) == 4:
-                obs_next, rew, done, info = result
-                if isinstance(info, dict):
-                    truncated = info["TimeLimit.truncated"]
+            # step in available envs (we don't take a step if we have the last agent)
+            available = np.where(self.to_be_reset == False)[0]
+            result = None
+            if len(available) > 0:
+                result = self.env.step(action_remap[available],
+                                       ready_env_ids[available])  # type: ignore
+            if result is not None:
+                if len(result) == 5:
+                    obs_next, rew, terminated, truncated, info = result
+                    # This done signal is referred to the next observation (next agent), not the one we are gathering now
+                    next_done = np.logical_or(terminated, truncated)
+                elif len(result) == 4:
+                    obs_next, rew, done, info = result
+                    if isinstance(info, dict):
+                        truncated = info["TimeLimit.truncated"]
+                    else:
+                        truncated = np.array(
+                            [
+                                info_item.get("TimeLimit.truncated", False)
+                                for info_item in info
+                            ]
+                        )
+                    terminated = np.logical_and(done, ~truncated)
                 else:
-                    truncated = np.array(
-                        [
-                            info_item.get("TimeLimit.truncated", False)
-                            for info_item in info
-                        ]
-                    )
-                terminated = np.logical_and(done, ~truncated)
-            else:
-                raise ValueError()
+                    raise ValueError()
 
-            reset_all = np.array(
+            can_reset = False
+            ready_to_reset = np.where(self.to_be_reset==True)[0]
+            if len(ready_to_reset) and result is not None:
+                can_reset = True
+
+                tmp_obs = copy.deepcopy(self.data.obs)
+                tmp_obs[available] = obs_next
+                obs_next = tmp_obs
+
+                tmp_rew = copy.deepcopy(self.data.rew)
+                tmp_rew[available] = rew
+                rew = tmp_rew
+
+                tmp_done = copy.deepcopy(self.done)
+                tmp_done[available] = next_done
+                next_done = tmp_done
+
+                # Envs ready_to_reset should not be reset again
+                self.data.info.reset_all[ready_to_reset] = False
+
+                tmp_info =  copy.deepcopy(self.data.info)
+                tmp_info[available] = info
+                info = tmp_info
+
+            elif len(ready_to_reset) and result is None:
+                can_reset = True
+
+                obs_next = self.data.obs
+                rew = self.data.rew
+                next_done = self.done
+                # These environments will be reset now
+                # Envs to reset should not be reset again
+                self.data.info.reset_all[ready_to_reset] = False
+                info = self.data.info
+
+            self.to_be_reset = np.array(
                 [
                     info_item.get("reset_all", False)
                     for info_item in info
                 ]
             )
+
+            # This information will NOT update obs while updating its rewards
+            # so it gives r and done referred to step t-1 and step t
+            # FOR THE SAME AGENT
             self.data.update(
                 obs_next=obs_next,
                 rew=rew,
-                terminated=terminated,
-                truncated=truncated,
-                done=done,
+                terminated=self.done,
+                truncated=self.done,
+                done=self.done,
                 info=info
             )
             if self.preprocess_fn:
@@ -153,14 +242,14 @@ class MultiAgentCollector(Collector):
 
             # add data into the buffer
             ptr, ep_rew, ep_len, ep_idx = self.buffer.add(
-                self.data, buffer_ids=ready_env_ids
+                self.data, buffer_ids=((ready_env_ids * self.number_of_agents) + self.data.obs.agent_id.astype(int))
             )
 
+            assert not np.any(ep_len > 5)
             # collect statistics
             step_count += len(ready_env_ids)
-
-            if np.any(reset_all):
-                env_ind_local = np.where(reset_all)[0]
+            if can_reset:
+                env_ind_local = ready_to_reset
                 env_ind_global = ready_env_ids[env_ind_local]
                 episode_count += len(env_ind_local)
                 episode_lens.append(ep_len[env_ind_local])
@@ -184,8 +273,10 @@ class MultiAgentCollector(Collector):
                         ready_env_ids = ready_env_ids[mask]
                         self.data = self.data[mask]
 
-            self.data.obs = self.data.obs_next
+                next_done[ready_to_reset] = False
 
+            self.data.obs = self.data.obs_next
+            self.done = next_done
             if (n_step and step_count >= n_step) or \
                     (n_episode and episode_count >= n_episode):
                 break
