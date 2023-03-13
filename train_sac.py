@@ -171,9 +171,7 @@ def watch(
 ) -> None:
     weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights", f"{args.model_name}")
 
-    env = DummyVectorEnv([lambda: get_env(graph=load_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"),
-                                          render_mode='human',
-                                          is_testing=True)])
+    env = DummyVectorEnv([lambda: get_env(render_mode='human', is_testing=True)])
     if masp_policy is None:
         masp_policy = load_policy(weights_path, args, env)
 
@@ -196,8 +194,7 @@ def train_agent(
 ) -> Tuple[dict, BasePolicy]:
     train_envs = SubprocVectorEnv([lambda: get_env(render_mode=None) for _ in range(args.training_num)])
     test_envs = SubprocVectorEnv([lambda:
-                                  get_env(graph=load_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"),
-                                          is_testing=True) for _ in range(args.test_num)])
+                                  get_env(is_testing=True) for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
