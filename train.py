@@ -2,35 +2,29 @@ import argparse
 import datetime
 import os
 import pprint
-import warnings
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import List, Tuple
 
 import gym
 import gymnasium
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.distributions import Independent, Normal
 from torch.utils.tensorboard import SummaryWriter
 
-from tianshou.data import Collector, VectorReplayBuffer, PrioritizedVectorReplayBuffer
-from tianshou.env import ShmemVectorEnv, DummyVectorEnv, SubprocVectorEnv
+from tianshou.data import VectorReplayBuffer
+from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
-from tianshou.policy import BasePolicy, MultiAgentPolicyManager, DQNPolicy, FQFPolicy
-from tianshou.trainer import onpolicy_trainer, offpolicy_trainer
-from tianshou.utils import TensorboardLogger, WandbLogger
-from tianshou.utils.net.continuous import ActorProb, Critic
-from tianshou.utils.net.common import Net
-from tianshou.utils.net.discrete import FullQuantileFunction, FractionProposalNetwork
+from tianshou.policy import BasePolicy, DQNPolicy
+from tianshou.trainer import offpolicy_trainer
 
 from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
-from graph_env.env.utils.core import load_testing_graph
+from graph_env.env.utils.core import load_graph
+from graph_env.env.utils.logger import CustomLogger
 
-from graph_env.env.utils.networks import GATNetwork
-from graph_env.env.utils.policies import MultiAgentSharedPolicy
+from graph_env.env.networks import GATNetwork
+from graph_env.env.policies import MultiAgentSharedPolicy
 
-from graph_env.env.utils.collector import MultiAgentCollector
+from graph_env.env.collector import MultiAgentCollector
 os.environ["SDL_VIDEODRIVER"]="x11"
 
 import time
@@ -56,8 +50,8 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--step-per-collect", type=int, default=10)
     parser.add_argument("--update-per-step", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--training-num", type=int, default=10)
-    parser.add_argument("--test-num", type=int, default=1)
+    parser.add_argument("--training-num", type=int, default=20)
+    parser.add_argument("--test-num", type=int, default=100)
     parser.add_argument("--logdir", type=str, default="log")
     parser.add_argument("--render", type=float, default=0.)
     parser.add_argument(
@@ -79,7 +73,7 @@ def get_parser() -> argparse.ArgumentParser:
         help="Set WANDB logger"
     )
     parser.add_argument("--save-buffer-name", type=str, default=None)
-    parser.add_argument("--model-name", type=str, default=None)
+    parser.add_argument("--model-name", type=str, default=datetime.datetime.now().strftime("%y%m%d-%H%M%S"))
 
     return parser
 
@@ -89,11 +83,16 @@ def get_args() -> argparse.Namespace:
     return parser.parse_known_args()[0]
 
 
-def get_env(number_of_agents=NUMBER_OF_AGENTS, radius=RADIUS_OF_INFLUENCE, graph=None, render_mode=None):
+def get_env(number_of_agents=NUMBER_OF_AGENTS,
+            radius=RADIUS_OF_INFLUENCE,
+            graph=None,
+            render_mode=None,
+            is_testing=False):
     env = graph_env_v0.env(graph=graph,
                            render_mode=render_mode,
                            number_of_agents=number_of_agents,
-                           radius=radius)
+                           radius=radius,
+                           is_testing=is_testing)
     return PettingZooEnv(env)
 
 
@@ -143,7 +142,9 @@ def watch(
 ) -> None:
     weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights", f"{args.model_name}")
 
-    env = DummyVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), render_mode='human')])
+    env = DummyVectorEnv([lambda: get_env(graph=load_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"),
+                                          render_mode='human',
+                                          is_testing=True)])
 
     if masp_policy is None:
         masp_policy = load_policy(weights_path, args, env)
@@ -152,7 +153,7 @@ def watch(
     masp_policy.policy.set_eps(args.eps_test)
 
     collector = MultiAgentCollector(masp_policy, env, exploration_noise=True, number_of_agents=20)
-    result = collector.collect(n_episode=1)
+    result = collector.collect(n_episode=args.test_num)
 
     pprint.pprint(result)
     rews, lens = result["rews"], result["lens"]
@@ -166,8 +167,8 @@ def train_agent(
     masp_policy: BasePolicy = None,
     optim: torch.optim.Optimizer = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([get_env for _ in range(args.training_num)])
-    test_envs = SubprocVectorEnv([lambda: get_env(graph=load_testing_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle")) for _ in range(args.test_num)])
+    train_envs = SubprocVectorEnv([lambda: get_env(render_mode=None) for _ in range(args.training_num)])
+    test_envs = SubprocVectorEnv([lambda: get_env(graph=load_graph(f"testing_graph_{NUMBER_OF_AGENTS}.gpickle"), is_testing=True)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -199,7 +200,7 @@ def train_agent(
     # log
     now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
     log_path = os.path.join(args.logdir, 'mpr', 'dqn')
-    logger = WandbLogger(project='dancing_bees')
+    logger = CustomLogger(project='dancing_bees', name=args.model_name)
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
     logger.load(writer)
@@ -207,9 +208,10 @@ def train_agent(
 
     def save_best_fn(pol):
         weights_name = os.path.join(
-            f"{weights_path}", f"{now}_best.pth"
+            f"{weights_path}", f"{args.model_name}_best.pth"
         )
 
+        print(f"Saving {args.model_name} Best")
         torch.save(
             pol.policy.state_dict(), weights_name
         )
@@ -220,7 +222,7 @@ def train_agent(
 
     def train_fn(epoch, env_step):
         # nature DQN setting, linear decay in the first 1M steps
-        final_decay_step = 4e5
+        final_decay_step = .6 * args.step_per_epoch * args.epoch
         if env_step <= final_decay_step:
             eps = args.eps_train - env_step / final_decay_step * \
                 (args.eps_train - args.eps_train_final)
@@ -257,8 +259,9 @@ def train_agent(
         # resume_from_log=args.resume
     )
 
+    print(f"Saving {args.model_name} last")
     torch.save(
-        masp_policy.policy.state_dict(), os.path.join(f"{weights_path}", f"{now}_last.pth")
+        masp_policy.policy.state_dict(), os.path.join(f"{weights_path}", f"{args.model_name}_last.pth")
     )
 
     return result, masp_policy
