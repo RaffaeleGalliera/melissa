@@ -34,6 +34,9 @@ class GraphEnv(AECEnv):
             device='cuda',
             local_ratio=None,
             seed=9,
+            is_scripted=False,
+            is_testing=False,
+            random_graph=False
     ):
         super().__init__()
         self.seed(seed)
@@ -49,7 +52,9 @@ class GraphEnv(AECEnv):
                            radius=radius,
                            np_random=self.np_random,
                            seed=seed,
-                           is_scripted=False)
+                           is_scripted=False,
+                           is_testing=is_testing,
+                           random_graph=random_graph)
 
         # Needs to be a string for assertions check in tianshou
         self.agents = [agent.name for agent in self.world.agents]
@@ -89,8 +94,6 @@ class GraphEnv(AECEnv):
         self.current_actions = [None] * NUMBER_OF_AGENTS
 
         self.reset()
-
-        self.np_random = None
 
     def enable_render(self, mode="human"):
         if not self.renderOn and mode == "human":
@@ -141,12 +144,14 @@ class GraphEnv(AECEnv):
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
-        np.random.seed(seed)
 
     def observe(self, agent: str):
         if all(value for key, value in self.terminations.items() if
                key in self.agents) and len(self.agents) == 1:
-            self.infos[self.agents[0]] = {'reset_all': True}
+            self.infos[self.agents[0]] = {'reset_all': True,
+                                          'messages_transmitted': self.world.messages_transmitted,
+                                          'coverage': sum([1 for agent in self.world.agents if sum(agent.state.received_from) or agent.state.message_origin])/self.world.num_agents
+                                          }
         return self.observation(
             self.world.agents[self.agent_name_mapping[agent]]
         )
@@ -209,6 +214,8 @@ class GraphEnv(AECEnv):
         self.agent_selection = self._agent_selector.next()
         self.current_actions = [None] * NUMBER_OF_AGENTS
 
+    # Tianshou PettingZoo Wrapper returns the reward of every agent in a single time
+    # Not using CumulativeReward
     def step(self, action):
         if(
             self.terminations[self.agent_selection]
@@ -225,8 +232,15 @@ class GraphEnv(AECEnv):
         agent_tmp = self.world.agents[int(current_agent)]
         agent_tmp.steps_taken += 1
 
+        # the agent which stepped last had its _cumulative_rewards accounted for
+        # (because it was returned by last()), so the _cumulative_rewards for this
+        # agent should start again at 0
+        self._cumulative_rewards[current_agent] = 0
+
         self.agent_selection = self._agent_selector.next()
         if not self.agent_selection:
+            self._accumulate_rewards()
+            self._clear_rewards()
             self._execute_world_step()
             self.num_moves += 1
 
@@ -258,11 +272,7 @@ class GraphEnv(AECEnv):
 
             if self.render_mode == 'human':
                 self.render()
-        else:
-            self._clear_rewards()
 
-        self._cumulative_rewards[current_agent] = 0
-        self._accumulate_rewards()
         self._deads_step_first()
 
     def _execute_world_step(self):
@@ -278,7 +288,7 @@ class GraphEnv(AECEnv):
         if self.local_ratio is not None:
             global_reward = float(self.global_reward())
 
-        for agent in [a for a in self.world.agents if str(a.id) in self.agents]:
+        for agent in [a for a in self.world.agents if a.name in self.agents]:
             agent_reward = float(self.reward(agent))
             if self.local_ratio is not None:
                 reward = (
@@ -318,22 +328,17 @@ class GraphEnv(AECEnv):
         # reward = agent.gained_two_hop_cover
         # if sum(agent.state.transmitted_to):
         #     reward -= sum([1 for index in one_hop_neighbor_indices if (sum(self.world.agents[index].state.transmitted_to) - 1)])
-
-        two_hop_cover = sum([1 for index in two_hop_neighbor_indices if sum(
-            list(self.world.agents[index].state.received_from[np.append(one_hop_neighbor_indices, agent.id)])) or self.world.agents[index].state.message_origin])
-
-        reward = two_hop_cover / len(two_hop_neighbor_indices)
-        # if sum(agent.state.transmitted_to):
-        #     reward = .8 * reward
-        # If all my 1 hop have transmitted already before this action give a penalty
-        if agent.action and (sum([1 for index in one_hop_neighbor_indices if sum(self.world.agents[index].state.transmitted_to)]) == sum(agent.one_hop_neighbours_ids)):
-            reward = -2
+        reward = agent.gained_two_hop_cover
+        if sum(agent.state.transmitted_to):
+            reward -= sum([1 for index in one_hop_neighbor_indices if
+                           sum(self.world.agents[index].state.transmitted_to)])
         if agent.steps_taken == 4:
-            if two_hop_cover == len(two_hop_neighbor_indices):
-                reward += 3 if not sum(agent.state.transmitted_to) else 1
-            else:
-                reward = -2
-
+            if not sum(agent.state.transmitted_to):
+                reward -= sum([1 for index in one_hop_neighbor_indices if
+                               sum(self.world.agents[
+                                       index].state.received_from) == 0
+                               or self.world.agents[
+                                   index].state.message_origin == 0])
         return reward
 
 

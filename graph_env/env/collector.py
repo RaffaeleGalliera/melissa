@@ -105,10 +105,12 @@ class MultiAgentCollector(Collector):
 
         step_count = 0
         episode_count = 0
+        master_episode_count = 0
         episode_rews = []
         episode_lens = []
         episode_start_indices = []
-
+        coverage = []
+        messages_transmitted = []
         while True:
             assert len(self.data) == len(ready_env_ids)
             # restore the state: if the last state is None, it won't store
@@ -153,7 +155,8 @@ class MultiAgentCollector(Collector):
             if result is not None:
                 if len(result) == 5:
                     obs_next, rew, terminated, truncated, info = result
-                    # This done signal is referred to the next observation (next agent), not the one we are gathering now
+                    # This done signal is referred to the next observation
+                    # (next agent), not the one we are gathering now
                     next_done = np.logical_or(terminated, truncated)
                 elif len(result) == 4:
                     obs_next, rew, done, info = result
@@ -190,7 +193,7 @@ class MultiAgentCollector(Collector):
                 # Envs ready_to_reset should not be reset again
                 self.data.info.reset_all[ready_to_reset] = False
 
-                tmp_info =  copy.deepcopy(self.data.info)
+                tmp_info = copy.deepcopy(self.data.info)
                 tmp_info[available] = info
                 info = tmp_info
 
@@ -248,13 +251,23 @@ class MultiAgentCollector(Collector):
             assert not np.any(ep_len > 5)
             # collect statistics
             step_count += len(ready_env_ids)
+
+            if np.any(self.done):
+                env_ind_local = np.where(self.done)[0]
+
+                episode_count += len(env_ind_local)
+                episode_lens.append(ep_len[env_ind_local])
+                episode_rews.append(ep_rew[np.ix_(env_ind_local, self.data.obs[env_ind_local].agent_id.astype(int))][:, 0])
+                episode_start_indices.append(ep_idx[env_ind_local])
+
+            # episode rews should be gathered when an agent's episode is done not
+            # when everyone resets
             if can_reset:
                 env_ind_local = ready_to_reset
                 env_ind_global = ready_env_ids[env_ind_local]
-                episode_count += len(env_ind_local)
-                episode_lens.append(ep_len[env_ind_local])
-                episode_rews.append(ep_rew[env_ind_local])
-                episode_start_indices.append(ep_idx[env_ind_local])
+                master_episode_count += len(env_ind_local)
+                coverage.append(self.data.info.coverage[env_ind_local])
+                messages_transmitted.append(self.data.info.messages_transmitted[env_ind_local])
                 # now we copy obs_next to obs, but since there might be
                 # finished episodes, we have to reset finished envs first.
                 self._reset_env_with_ids(
@@ -266,7 +279,7 @@ class MultiAgentCollector(Collector):
                 # remove surplus env id from ready_env_ids
                 # to avoid bias in selecting environments
                 if n_episode:
-                    surplus_env_num = len(ready_env_ids) - (n_episode - episode_count)
+                    surplus_env_num = len(ready_env_ids) - (n_episode - master_episode_count)
                     if surplus_env_num > 0:
                         mask = np.ones_like(ready_env_ids, dtype=bool)
                         mask[env_ind_local[:surplus_env_num]] = False
@@ -278,7 +291,7 @@ class MultiAgentCollector(Collector):
             self.data.obs = self.data.obs_next
             self.done = next_done
             if (n_step and step_count >= n_step) or \
-                    (n_episode and episode_count >= n_episode):
+                    (n_episode and master_episode_count >= n_episode):
                 break
 
         # generate statistics
@@ -300,7 +313,7 @@ class MultiAgentCollector(Collector):
             )
             self.reset_env()
 
-        if episode_count > 0:
+        if master_episode_count or episode_count > 0:
             rews, lens, idxs = list(
                 map(
                     np.concatenate,
@@ -313,14 +326,34 @@ class MultiAgentCollector(Collector):
             rews, lens, idxs = np.array([]), np.array([], int), np.array([], int)
             rew_mean = rew_std = len_mean = len_std = 0
 
+        if master_episode_count > 0:
+            msgs, coverages = list(
+                map(
+                    np.concatenate,
+                    [messages_transmitted, coverage]
+                )
+            )
+            msg_mean, msg_std = msgs.mean(), msgs.std()
+            coverage_mean, coverage_std = coverages.mean(), coverages.std()
+        else:
+            msgs, coverages = np.array([]), np.array([], int)
+            msg_mean = msg_std = coverage_mean = coverage_std = 0
+
         return {
             "n/ep": episode_count,
+            "n/graphs": master_episode_count,
             "n/st": step_count,
             "rews": rews,
             "lens": lens,
+            "msgs": msgs,
+            "coverages": coverages,
             "idxs": idxs,
             "rew": rew_mean,
             "len": len_mean,
             "rew_std": rew_std,
             "len_std": len_std,
+            "coverage": coverage_mean,
+            "coverage_std": coverage_std,
+            "msg": msg_mean,
+            "msg_std": msg_std
         }

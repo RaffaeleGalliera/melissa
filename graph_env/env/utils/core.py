@@ -1,3 +1,4 @@
+import glob
 import itertools
 import pickle
 
@@ -8,7 +9,7 @@ import networkx as nx
 from torch_geometric.utils import from_networkx
 
 
-# OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html#section-8.3.1
+# OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html
 def mpr_heuristic(one_hop_neighbours_ids,
                   two_hop_neighbours_ids,
                   agent_id,
@@ -115,6 +116,7 @@ class Agent:
         self.suppl_mpr = None
         self.steps_taken = None
         self.truncated = None
+        self.actions_history = np.zeros((4,))
 
     def reset(self, local_view, pos):
         self.__init__(agent_id=self.id, local_view=local_view, state=self.state, pos=pos)
@@ -127,7 +129,7 @@ class Agent:
         return sum([received and relay for received, relay in
                     zip(self.state.received_from, self.state.relays_for)])
 
-    def update_two_hop_cover(self, agents):
+    def update_two_hop_cover_from_one_hopper(self, agents):
         two_hop_neighbor_indices = np.where(self.two_hop_neighbours_ids)[0]
         one_hop_neighbor_indices = np.where(self.one_hop_neighbours_ids)[0]
 
@@ -135,6 +137,7 @@ class Agent:
         self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
 
         self.two_hop_cover = new_two_hop_cover
+
 
 # In this world the agents select if they are on the MPR set or not
 class World:
@@ -146,20 +149,25 @@ class World:
             np_random,
             seed=None,
             graph=None,
-            is_scripted=False
+            is_scripted=False,
+            is_testing=False,
+            random_graph=False
     ):
         # Includes origin message
         self.messages_transmitted = 1
         self.origin_agent = None
-
         self.num_agents = number_of_agents
         self.radius = radius
-        self.graph = create_connected_graph(n=self.num_agents, radius=self.radius) if graph is None else graph
+        self.graph = graph
         self.is_scripted = is_scripted
-        self.random_structure = False if graph else True
-        self.agents = [Agent(i, nx.ego_graph(self.graph, i, undirected=True), is_scripted=self.is_scripted)
-                       for i in range(number_of_agents)]
+        self.random_graph = random_graph
+        self.agents = None
         self.np_random = np_random
+        self.is_testing = is_testing
+        if self.is_testing:
+            self.graphs = glob.glob('testing/*')
+        else:
+            self.graphs = glob.glob('training/*')
         self.reset(seed=seed)
 
     # return all agents controllable by external policies
@@ -211,6 +219,7 @@ class World:
         if agent.action:
             agent.state.transmitted_to += agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
+            agent.actions_history[agent.steps_taken - 1] = agent.action
             neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
             for index in neighbour_indices:
                 self.agents[index].state.received_from[agent.id] += 1
@@ -218,24 +227,44 @@ class World:
         # Update graph
         self.graph.nodes[agent.id]['features'] = np.append(
             agent.one_hop_neighbours_ids,
-            (sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids), (1 if agent.action else 0), agent.steps_taken)
+            (sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids), agent.steps_taken)
         )
+        self.graph.nodes[agent.id]['features'] = np.concatenate(
+            (self.graph.nodes[agent.id]['features'],
+             agent.actions_history)
+        )
+
+        # History
+        # features = np.append(
+        #     agent.one_hop_neighbours_ids,
+        #     (sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids),
+        #      (1 if agent.action else 0),
+        #      agent.steps_taken)
+        # )
+        #
+        # self.graph.nodes[agent.id]['features'][agent.steps_taken*(self.num_agents+3):(agent.steps_taken + 1)*(self.num_agents+3)] = features
+
 
         agent.update_local_view(
             local_view=nx.ego_graph(self.graph, agent.id,
                                     undirected=True))
-        agent.update_two_hop_cover(self.agents)
-
-
+        agent.update_two_hop_cover_from_one_hopper(self.agents)
 
     def reset(self, seed=None):
-        if self.random_structure:
+        if self.random_graph:
             self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
+        elif self.graph is None:
+            self.graph = load_graph(
+                self.np_random.choice(self.graphs,
+                                      replace=False if self.is_testing else True
+                                      )
+            )
 
+        self.agents = [Agent(i, nx.ego_graph(self.graph, i, undirected=True), is_scripted=self.is_scripted)
+                       for i in range(self.num_agents)]
         # Includes origin message
         self.messages_transmitted = 0
-        random_agent = self.np_random.choice(
-            self.agents) if self.random_structure else self.agents[0]
+        random_agent = self.agents[0] if self.is_testing else self.np_random.choice(self.agents)
         self.origin_agent = random_agent.id
 
         for agent in self.agents:
@@ -245,9 +274,10 @@ class World:
             for agent_index in self.graph.neighbors(agent.id):
                 one_hop_neighbours_ids[agent_index] = 1
             self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
+            # self.graph.nodes[agent.id]['features'] = np.append(one_hop_neighbours_ids, [0] * ((self.num_agents + 3) * 4 + 3))
             self.graph.nodes[agent.id]['features'] = np.append(
                 one_hop_neighbours_ids,
-                (0, 0, 0)
+                (0, 0, 0, 0, 0, 0)
             )
             self.graph.nodes[agent.id]['label'] = agent.id
             self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
@@ -268,6 +298,7 @@ class World:
 
         random_agent.state.message_origin = 1
         random_agent.action = 1
+        random_agent.steps_taken += 1
         self.update_agent_state(random_agent)
 
 
@@ -283,12 +314,12 @@ def create_connected_graph(n, radius):
     return graph
 
 
-def load_testing_graph(path="testing_graph.gpickle"):
+def load_graph(path="testing_graph.gpickle"):
     with open(path, "rb") as input_file:
         graph = pickle.load(input_file)
     return graph
 
 
-def save_testing_graph(graph, path="testing_graph.gpickle"):
+def save_graph(graph, path="testing_graph.gpickle"):
     with open(path, "wb") as output_file:
         pickle.dump(graph, output_file)
