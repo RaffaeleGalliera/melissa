@@ -39,7 +39,7 @@ class GraphEnv(AECEnv):
             random_graph=False
     ):
         super().__init__()
-        self.seed(seed)
+        self.seed()
         self.device = device
 
         self.render_mode = render_mode
@@ -51,7 +51,6 @@ class GraphEnv(AECEnv):
                            number_of_agents=number_of_agents,
                            radius=radius,
                            np_random=self.np_random,
-                           seed=seed,
                            is_scripted=False,
                            is_testing=is_testing,
                            random_graph=random_graph)
@@ -192,9 +191,11 @@ class GraphEnv(AECEnv):
 
         return agent_observation_with_mask
 
-    def reset(self, seed=9, return_info=False, options=None):
+    def reset(self, seed=None, return_info=False, options=None):
+        # TODO check that workers seed is set from train.py
         if seed is not None:
             self.seed(seed=seed)
+        self.world.np_random = self.np_random
 
         self.agents = self.possible_agents[:]
         self._agent_selector.reinit(self.agents)

@@ -225,13 +225,12 @@ def train_agent(
 
     # train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
-    now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
     log_path = os.path.join(args.logdir, 'mpr', 'dqn')
     logger = CustomLogger(project='dancing_bees', name=args.model_name)
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
     logger.load(writer)
-    weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights")
+    weights_path = os.path.join(args.logdir, "mpr", "sac", "weights")
 
     def save_best_fn(pol):
         weights_name = os.path.join(

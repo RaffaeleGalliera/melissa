@@ -147,7 +147,6 @@ class World:
             number_of_agents,
             radius,
             np_random,
-            seed=None,
             graph=None,
             is_scripted=False,
             is_testing=False,
@@ -159,6 +158,7 @@ class World:
         self.num_agents = number_of_agents
         self.radius = radius
         self.graph = graph
+        self.is_graph_fixed = True if graph else False
         self.is_scripted = is_scripted
         self.random_graph = random_graph
         self.agents = None
@@ -168,7 +168,7 @@ class World:
             self.graphs = glob.glob('testing/*')
         else:
             self.graphs = glob.glob('training/*')
-        self.reset(seed=seed)
+        self.reset()
 
     # return all agents controllable by external policies
     @property
@@ -250,10 +250,10 @@ class World:
                                     undirected=True))
         agent.update_two_hop_cover_from_one_hopper(self.agents)
 
-    def reset(self, seed=None):
+    def reset(self):
         if self.random_graph:
             self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
-        elif self.graph is None:
+        elif not self.is_graph_fixed:
             self.graph = load_graph(
                 self.np_random.choice(self.graphs,
                                       replace=False if self.is_testing else True

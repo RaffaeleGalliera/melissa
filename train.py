@@ -34,7 +34,7 @@ warnings.filterwarnings("ignore")
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=9)
     parser.add_argument("--eps-test", type=float, default=0.001)
     parser.add_argument("--eps-train", type=float, default=1.)
     parser.add_argument("--eps-train-final", type=float, default=0.05)
@@ -165,8 +165,9 @@ def train_agent(
     masp_policy: BasePolicy = None,
     optim: torch.optim.Optimizer = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([lambda: get_env(render_mode=None) for _ in range(args.training_num)])
+    train_envs = SubprocVectorEnv([lambda: get_env(render_mode="human") for i in range(args.training_num)])
     test_envs = SubprocVectorEnv([lambda: get_env(is_testing=True)])
+
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -196,7 +197,6 @@ def train_agent(
     )
     # train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
-    now = datetime.datetime.now().strftime("%y%m%d-%H%M%S")
     log_path = os.path.join(args.logdir, 'mpr', 'dqn')
     logger = CustomLogger(project='dancing_bees', name=args.model_name)
     writer = SummaryWriter(log_path)
