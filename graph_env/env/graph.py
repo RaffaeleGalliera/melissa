@@ -33,7 +33,6 @@ class GraphEnv(AECEnv):
             max_cycles=100,
             device='cuda',
             local_ratio=None,
-            seed=9,
             is_scripted=False,
             is_testing=False,
             random_graph=False
@@ -325,10 +324,6 @@ class GraphEnv(AECEnv):
         two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
         assert(set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
 
-        # [np.append(one_hop_neighbor_indices, agent.id)]
-        # reward = agent.gained_two_hop_cover
-        # if sum(agent.state.transmitted_to):
-        #     reward -= sum([1 for index in one_hop_neighbor_indices if (sum(self.world.agents[index].state.transmitted_to) - 1)])
         reward = agent.gained_two_hop_cover
         if sum(agent.state.transmitted_to):
             reward -= sum([1 for index in one_hop_neighbor_indices if

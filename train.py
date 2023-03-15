@@ -25,12 +25,13 @@ from graph_env.env.networks import GATNetwork
 from graph_env.env.policies import MultiAgentSharedPolicy
 
 from graph_env.env.collector import MultiAgentCollector
-os.environ["SDL_VIDEODRIVER"]="x11"
 
 import time
-
 import warnings
+
+os.environ["SDL_VIDEODRIVER"]="x11"
 warnings.filterwarnings("ignore")
+
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
@@ -165,7 +166,7 @@ def train_agent(
     masp_policy: BasePolicy = None,
     optim: torch.optim.Optimizer = None,
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([lambda: get_env(render_mode="human") for i in range(args.training_num)])
+    train_envs = SubprocVectorEnv([lambda: get_env() for i in range(args.training_num)])
     test_envs = SubprocVectorEnv([lambda: get_env(is_testing=True)])
 
     # seed
