@@ -55,10 +55,9 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--test-num", type=int, default=100)
     parser.add_argument("--logdir", type=str, default="log")
     parser.add_argument("--render", type=float, default=0.)
-    parser.add_argument(
-        "--device", type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu"
-    )
+    parser.add_argument('--dueling-q-hidden-sizes', type=int, nargs='*', default=[128, 128])
+    parser.add_argument('--dueling-v-hidden-sizes', type=int, nargs='*', default=[128, 128])
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume-path", type=str, default=None)
     parser.add_argument("--resume-id", type=str, default=None)
     parser.add_argument(
@@ -112,12 +111,16 @@ def get_agents(
 
     if policy is None:
         # features
+        q_param = {"hidden_sizes": args.dueling_q_hidden_sizes}
+        v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
+
         net = GATNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
-            device=args.device
+            device=args.device,
+            dueling_param=(q_param, v_param)
         )
 
         optim = torch.optim.Adam(
@@ -143,7 +146,7 @@ def watch(
 ) -> None:
     weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights", f"{args.model_name}")
 
-    env = DummyVectorEnv([lambda: get_env(render_mode='human', is_testing=True)])
+    env = DummyVectorEnv([lambda: get_env(is_testing=True)])
 
     if masp_policy is None:
         masp_policy = load_policy(weights_path, args, env)
@@ -151,7 +154,7 @@ def watch(
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
 
-    collector = MultiAgentCollector(masp_policy, env, exploration_noise=True, number_of_agents=20)
+    collector = MultiAgentCollector(masp_policy, env, exploration_noise=True, number_of_agents=NUMBER_OF_AGENTS)
     result = collector.collect(n_episode=args.test_num)
 
     pprint.pprint(result)
@@ -220,13 +223,7 @@ def train_agent(
         return mean_rewards > -4.84
 
     def train_fn(epoch, env_step):
-        # nature DQN setting, linear decay in the first 1M steps
-        final_decay_step = .6 * args.step_per_epoch * args.epoch
-        if env_step <= final_decay_step:
-            eps = args.eps_train - env_step / final_decay_step * \
-                (args.eps_train - args.eps_train_final)
-        else:
-            eps = args.eps_train_final
+        eps = max(args.eps_train * (1 - 5e-6) ** env_step, args.eps_test)
         masp_policy.policy.set_eps(eps)
         if env_step % 1000 == 0:
             logger.write("train/env_step", env_step, {"train/eps": eps})
@@ -274,13 +271,17 @@ def load_policy(path, args, env):
     if os.path.exists(path):
         # model
         # features
+        q_param = {"hidden_sizes": args.dueling_q_hidden_sizes}
+        v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
+
         net = GATNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
-            device=args.device
-        ).to(args.device)
+            device=args.device,
+            dueling_param=(q_param, v_param)
+        )
 
         optim = torch.optim.Adam(
             net.parameters(), lr=args.lr

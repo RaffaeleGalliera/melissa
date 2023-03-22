@@ -7,6 +7,7 @@ import logging
 
 import networkx as nx
 from torch_geometric.utils import from_networkx
+from . import constants
 
 
 # OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html
@@ -37,7 +38,8 @@ def mpr_heuristic(one_hop_neighbours_ids,
         d_y[int(local_view.nodes[neighbor]['label'])] = sum(
             clean_neighbor_neighbors)
 
-    # Add to covered if the cleaned 2hop neighbors are the only ones providing that link so far
+    # Add to covered if the cleaned 2hop neighbors are the only ones providing
+    # that link so far
     for key, candidates in two_hop_coverage_summary.items():
         if len(candidates) == 1:
             mpr[candidates[0]] = 1
@@ -119,7 +121,10 @@ class Agent:
         self.actions_history = np.zeros((4,))
 
     def reset(self, local_view, pos):
-        self.__init__(agent_id=self.id, local_view=local_view, state=self.state, pos=pos)
+        self.__init__(agent_id=self.id,
+                      local_view=local_view,
+                      state=self.state,
+                      pos=pos)
 
     def update_local_view(self, local_view):
         self.local_view = local_view
@@ -131,11 +136,15 @@ class Agent:
 
     def update_two_hop_cover_from_one_hopper(self, agents):
         two_hop_neighbor_indices = np.where(self.two_hop_neighbours_ids)[0]
-        one_hop_neighbor_indices = np.where(self.one_hop_neighbours_ids)[0]
 
-        new_two_hop_cover = sum([1 for index in two_hop_neighbor_indices if sum(list(agents[index].state.received_from[np.append(one_hop_neighbor_indices, self.id)])) or agents[index].state.message_origin])
+        new_two_hop_cover = sum(
+            [1 for index in two_hop_neighbor_indices
+             if sum(list(agents[index].state.received_from))
+             or agents[index].state.message_origin
+             ]
+        )
+
         self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
-
         self.two_hop_cover = new_two_hop_cover
 
 
@@ -165,9 +174,9 @@ class World:
         self.np_random = np_random
         self.is_testing = is_testing
         if self.is_testing:
-            self.graphs = glob.glob('testing/*')
+            self.graphs = glob.glob(constants.TESTING_PATH)
         else:
-            self.graphs = glob.glob('training/*')
+            self.graphs = glob.glob(constants.TRAINING_PATH)
         self.reset()
 
     # return all agents controllable by external policies
@@ -195,7 +204,8 @@ class World:
                 self.agents[index].state.relays_for[agent.id] = 1
 
         for agent in self.scripted_agents:
-            if (agent.has_received_from_relayed_node() or agent.state.message_origin) \
+            if (agent.has_received_from_relayed_node()
+                or agent.state.message_origin) \
                     and not sum(agent.state.transmitted_to):
                 agent.action = 1
             else:
@@ -203,14 +213,16 @@ class World:
 
         # Send message
         for agent in self.agents:
-            logging.debug(f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}")
+            logging.debug(f"Agent {agent.name} Action: {agent.action} "
+                          f"with Neigh: {agent.one_hop_neighbours_ids}")
             self.update_agent_state(agent)
 
         for agent in self.agents:
             self.update_local_graph(agent)
 
     def update_local_graph(self, agent):
-        agent.local_view = nx.ego_graph(self.graph, agent.id,
+        agent.local_view = nx.ego_graph(self.graph,
+                                        agent.id,
                                         undirected=True)
 
     def update_agent_state(self, agent):
@@ -225,25 +237,16 @@ class World:
                 self.agents[index].state.received_from[agent.id] += 1
 
         # Update graph
-        self.graph.nodes[agent.id]['features'] = np.append(
-            agent.one_hop_neighbours_ids,
-            (sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids), agent.steps_taken)
-        )
+        self.graph.nodes[agent.id]['features'] = [
+            sum(agent.one_hop_neighbours_ids),
+            sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids),
+            agent.steps_taken
+        ]
+
         self.graph.nodes[agent.id]['features'] = np.concatenate(
             (self.graph.nodes[agent.id]['features'],
              agent.actions_history)
         )
-
-        # History
-        # features = np.append(
-        #     agent.one_hop_neighbours_ids,
-        #     (sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids),
-        #      (1 if agent.action else 0),
-        #      agent.steps_taken)
-        # )
-        #
-        # self.graph.nodes[agent.id]['features'][agent.steps_taken*(self.num_agents+3):(agent.steps_taken + 1)*(self.num_agents+3)] = features
-
 
         agent.update_local_view(
             local_view=nx.ego_graph(self.graph, agent.id,
@@ -260,7 +263,9 @@ class World:
                                       )
             )
 
-        self.agents = [Agent(i, nx.ego_graph(self.graph, i, undirected=True), is_scripted=self.is_scripted)
+        self.agents = [Agent(i,
+                             nx.ego_graph(self.graph, i, undirected=True),
+                             is_scripted=self.is_scripted)
                        for i in range(self.num_agents)]
         # Includes origin message
         self.messages_transmitted = 0
@@ -274,22 +279,24 @@ class World:
             for agent_index in self.graph.neighbors(agent.id):
                 one_hop_neighbours_ids[agent_index] = 1
             self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
-            # self.graph.nodes[agent.id]['features'] = np.append(one_hop_neighbours_ids, [0] * ((self.num_agents + 3) * 4 + 3))
-            self.graph.nodes[agent.id]['features'] = np.append(
-                one_hop_neighbours_ids,
-                (0, 0, 0, 0, 0, 0)
-            )
+            self.graph.nodes[agent.id]['features'] = np.zeros((7,))
             self.graph.nodes[agent.id]['label'] = agent.id
             self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
 
         actions_dim = np.ones(2)
         for agent in self.agents:
-            agent.reset(local_view=nx.ego_graph(self.graph, agent.id, undirected=True),
+            agent.reset(local_view=nx.ego_graph(self.graph,
+                                                agent.id,
+                                                undirected=True),
                         pos=self.graph.nodes[agent.id]['pos'])
             agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['one_hop']
             agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids
             for agent_index in self.graph.neighbors(agent.id):
-                agent.two_hop_neighbours_ids = np.logical_or(self.graph.nodes[agent_index]['one_hop'].astype(int), agent.two_hop_neighbours_ids.astype(int))
+
+                agent.two_hop_neighbours_ids = np.logical_or(
+                    self.graph.nodes[agent_index]['one_hop'].astype(int),
+                    agent.two_hop_neighbours_ids.astype(int)
+                )
             agent.two_hop_neighbours_ids[agent.id] = 0
 
             agent.allowed_actions = [True] * int(np.sum(actions_dim))

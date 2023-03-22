@@ -75,7 +75,10 @@ class GraphEnv(AECEnv):
                     shape=(obs_dim,),
                     dtype=np.float32,
                 ),
-                'action_mask': gymnasium.spaces.Box(low=0, high=1, shape=(2,), dtype=np.int8),
+                'action_mask': gymnasium.spaces.Box(low=0,
+                                                    high=1,
+                                                    shape=(2,),
+                                                    dtype=np.int8),
             })
             state_dim += obs_dim
             self.action_spaces[agent.name] = gymnasium.spaces.Discrete(2)
@@ -180,7 +183,8 @@ class GraphEnv(AECEnv):
                             Batch(observation=np.where(labels == agent.id))])
 
         agent.allowed_actions[1] = True if (sum(agent.state.received_from) or agent.state.message_origin) and not sum(agent.state.transmitted_to) else False
-        # Message origin is handled before the first step, hence, there is no need to prohibit non transmission
+        # Message origin is handled before the first step, hence
+        # there is no need to prohibit non transmission
         agent.allowed_actions[0] = False if sum([1 for index in one_hop_neighbor_indices if sum(self.world.agents[index].one_hop_neighbours_ids) == 1]) and not sum(agent.state.transmitted_to) else True
 
         agent_observation_with_mask = {
@@ -214,8 +218,8 @@ class GraphEnv(AECEnv):
         self.agent_selection = self._agent_selector.next()
         self.current_actions = [None] * NUMBER_OF_AGENTS
 
-    # Tianshou PettingZoo Wrapper returns the reward of every agent in a single time
-    # Not using CumulativeReward
+    # Tianshou PettingZoo Wrapper returns the reward of every agent in a single
+    # time not using CumulativeReward
     def step(self, action):
         if(
             self.terminations[self.agent_selection]
@@ -232,9 +236,9 @@ class GraphEnv(AECEnv):
         agent_tmp = self.world.agents[int(current_agent)]
         agent_tmp.steps_taken += 1
 
-        # the agent which stepped last had its _cumulative_rewards accounted for
-        # (because it was returned by last()), so the _cumulative_rewards for this
-        # agent should start again at 0
+        # the agent which stepped last had its _cumulative_rewards accounted
+        # for (because it was returned by last()), so the _cumulative_rewards
+        # for this agent should start again at 0
         self._cumulative_rewards[current_agent] = 0
 
         self.agent_selection = self._agent_selector.next()
@@ -248,13 +252,14 @@ class GraphEnv(AECEnv):
                 agent_obj = self.world.agents[int(agent)]
                 if agent_obj.steps_taken >= 4 and not agent_obj.truncated:
                     agent_obj.truncated = True
-                    # terminations must be shifted somehow due to how the collector gathers the next obs
+                    # terminations must be shifted somehow due to how
+                    # the collector gathers the next obs
                     self.terminations[agent_obj.name] = True
 
             self.agents = [agent.name for agent in self.world.agents
-                 if (sum(agent.state.received_from) and
-                     not agent.state.message_origin and
-                     agent.name in self.terminations)]
+                           if (sum(agent.state.received_from) and
+                               not agent.state.message_origin and
+                               agent.name in self.terminations)]
             self._agent_selector.enable(self.agents)
             self._agent_selector.new_round()
             self.agent_selection = self._agent_selector.next()
@@ -262,8 +267,10 @@ class GraphEnv(AECEnv):
             # previous_agent = self.agent_selection
             self.current_actions = [None] * NUMBER_OF_AGENTS
 
-            n_received = sum([1 for agent in self.world.agents if
-                              sum(agent.state.received_from) or agent.state.message_origin])
+            n_received = sum(
+                [1 for agent in self.world.agents if
+                 sum(agent.state.received_from) or agent.state.message_origin]
+            )
 
             if n_received == NUMBER_OF_AGENTS and self.render_mode == 'human':
                 print(
@@ -279,7 +286,9 @@ class GraphEnv(AECEnv):
         for i, agent in enumerate(self.world.agents):
             action = self.current_actions[i]
             scenario_action = [action]
-            self._set_action(scenario_action, agent, self.action_spaces[agent.name])
+            self._set_action(scenario_action,
+                             agent,
+                             self.action_spaces[agent.name])
 
         self.world.step()
 
@@ -306,7 +315,7 @@ class GraphEnv(AECEnv):
         assert len(action) == 0
 
     def global_reward(self):
-        ##  Negative reward
+        # Negative reward
         accumulated = 0
         alpha = 0.001
         for agent in self.world.agents:
@@ -324,17 +333,20 @@ class GraphEnv(AECEnv):
         two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
         assert(set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
 
-        reward = agent.gained_two_hop_cover
+        reward = agent.gained_two_hop_cover / len(two_hop_neighbor_indices)
         if sum(agent.state.transmitted_to):
             reward -= sum([1 for index in one_hop_neighbor_indices if
-                           sum(self.world.agents[index].state.transmitted_to)])
+                           sum(self.world.agents[
+                                   index].state.transmitted_to)]) / len(
+                one_hop_neighbor_indices)
         if agent.steps_taken == 4:
             if not sum(agent.state.transmitted_to):
                 reward -= sum([1 for index in one_hop_neighbor_indices if
                                sum(self.world.agents[
                                        index].state.received_from) == 0
                                or self.world.agents[
-                                   index].state.message_origin == 0])
+                                   index].state.message_origin == 0]) / len(
+                    one_hop_neighbor_indices)
         return reward
 
 
