@@ -1,49 +1,46 @@
-from pettingzoo.utils import agent_selector
-
-
-# UNUSED To be finished
-class MprSelector:
+class CustomSelector:
     """Outputs an agent in the given order whenever agent_select is called.
 
     Can reinitialize to a new order
     """
-    def __init__(self, agent_order, agents):
-        self.reinit(agent_order, agents)
+    def __init__(self, agents):
+        self.reinit(agents)
 
-    def reinit(self, agent_order, agents):
-        self.agent_order = agent_order
-        self.agents = agents
-        self._current_agent = -1
+    def reinit(self, agents):
+        self.agents = {agent: {
+            "steps": 0,
+            "active": False,
+            "selected_round": False
+        } for agent in agents}
+        self._current_agent = 0
         self.selected_agent = 0
-        self.selectable = [agent for agent in agents if (agent.has_received_from_relayed_node() or agent.state.message_origin) and not sum(agent.state.transmitted_to)]
 
     def reset(self):
-        self.reinit(self.agent_order, self.agents)
+        self.reinit(self.agents)
         return self.next()
 
     def next(self):
+        self.selectable = [key for key, values in self.agents.items() if values["steps"] <= 4 and values["active"] and not values["selected_round"]]
         if len(self.selectable):
-            self._current_agent = (self._current_agent + 1) % len(self.selectable)
-            self.selected_agent = self.selectable[self._current_agent].name
+            self.selected_agent = self.agents[self.selectable[0]]
+            self.selected_agent['steps'] += 1
+            self.selected_agent['selected_round'] = True
 
-            return self.selected_agent
+            return self.selectable[0]
         else:
-            return None
+            return False
+
+    def disable(self, agent):
+        self.agents[agent]["active"] = False
+
+    def enable(self, agents):
+        for agent in agents:
+            self.agents[agent]["active"] = True if self.agents[agent]["steps"] < 4 else False
+
+    def new_round(self):
+        for key, values in self.agents.items():
+            values["selected_round"] = False
 
     def is_last(self):
         """Does not work as expected if you change the order."""
-        return self.selected_agent == self.selectable[-1].name
-
-    def is_first(self):
-        return self.selected_agent == self.selectable[0].name
-
-    def __eq__(self, other):
-        if not isinstance(other, MprSelector):
-            return NotImplemented
-
-        return (
-            self.agent_order == other.agent_order
-            and self._current_agent == other._current_agent
-            and self.selected_agent == other.selected_agent
-        )
-
+        return True if not len(self.selectable) else False

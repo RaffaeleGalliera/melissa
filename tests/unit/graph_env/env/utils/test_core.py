@@ -1,17 +1,17 @@
 import pytest
 import networkx as nx
 from gymnasium.utils import seeding
-from graph_env.env.utils.core import MprAgent, MprWorld, MprAgentState
+from graph_env.env.utils.core import Agent, World, State
 import numpy as np
 
 @pytest.fixture
 def world():
     def _world(graph):
         np_random, seed = seeding.np_random(9)
-        return MprWorld(number_of_agents=4,
-                        radius=.40,
-                        np_random=np_random,
-                        graph=graph)
+        return World(number_of_agents=4,
+                     radius=.40,
+                     np_random=np_random,
+                     graph=graph)
 
     return _world
 
@@ -28,7 +28,7 @@ def graph():
 
 @pytest.fixture
 def agent_state():
-    state = MprAgentState()
+    state = State()
     state.received_from = [0, 0, 0, 0]
     state.transmitted_to = [0, 0, 0, 0]
     state.relays_for = [0, 0, 0, 0]
@@ -39,7 +39,7 @@ def agent_state():
 # Factory as a fixture paradigm
 @pytest.fixture
 def relaying_agent_state():
-    def _relaying_agent_state(state: MprAgentState,
+    def _relaying_agent_state(state: State,
                               relays_for: list,
                               received_from: list):
         state.relays_for = relays_for
@@ -54,13 +54,13 @@ def relaying_agent_state():
 @pytest.fixture
 def agent():
     def _agent(state, graph):
-        return MprAgent(agent_id=0,
-                        local_view=nx.ego_graph(graph, 0, undirected=True),
-                        state=state)
+        return Agent(agent_id=0,
+                     local_view=nx.ego_graph(graph, 0, undirected=True),
+                     state=state)
     return _agent
 
 
-class TestMprAgent:
+class TestAgent:
     # test case for agent receiving from relayed node
     def test_has_received_form_relayed_node(self,
                                             agent,
@@ -74,7 +74,7 @@ class TestMprAgent:
         assert not agent(state, graph).has_received_from_relayed_node()
 
 
-class TestMprWorld:
+class TestWorld:
     def test_set_relays(self, world, graph):
         world = world(graph)
         agent = world.agents[0]
@@ -90,7 +90,8 @@ class TestMprWorld:
 
         world.update_agent_state(world.agents[0])
         assert world.agents[1].state.received_from[0]
-        assert world.messages_transmitted == 1
+        # Count origin message as well
+        assert world.messages_transmitted == 2
 
     def test_update_agent_state_message_origin(self, world, graph):
         world = world(graph)

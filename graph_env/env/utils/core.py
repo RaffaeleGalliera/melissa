@@ -1,3 +1,4 @@
+import glob
 import itertools
 import pickle
 
@@ -6,14 +7,16 @@ import logging
 
 import networkx as nx
 from torch_geometric.utils import from_networkx
+from . import constants
 
 
-# OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html#section-8.3.1
+# OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html
 def mpr_heuristic(one_hop_neighbours_ids,
                   two_hop_neighbours_ids,
                   agent_id,
                   local_view
                   ):
+    two_hop_neighbours_ids = two_hop_neighbours_ids - one_hop_neighbours_ids
     d_y = dict()
     two_hop_coverage_summary = {index: [] for index, value in
                                 enumerate(two_hop_neighbours_ids) if
@@ -22,11 +25,10 @@ def mpr_heuristic(one_hop_neighbours_ids,
     mpr = np.zeros(len(one_hop_neighbours_ids))
 
     for neighbor in local_view.neighbors(agent_id):
-        clean_neighbor_neighbors = local_view.nodes[neighbor]['features'].copy()
+        clean_neighbor_neighbors = local_view.nodes[neighbor]['one_hop'].copy()
         # Exclude from the list the 2hop neighbours already reachable by self
         clean_neighbor_neighbors[agent_id] = 0
-        for index in [i for i, x in enumerate(one_hop_neighbours_ids) if
-                      x == 1]:
+        for index in np.where(one_hop_neighbours_ids)[0]:
             clean_neighbor_neighbors[index] = 0
         # Calculate the coverage for two hop neighbors
         for index in [i for i, x in enumerate(two_hop_neighbours_ids.astype(
@@ -36,7 +38,8 @@ def mpr_heuristic(one_hop_neighbours_ids,
         d_y[int(local_view.nodes[neighbor]['label'])] = sum(
             clean_neighbor_neighbors)
 
-    # Add to covered if the cleaned 2hop neighbors are the only ones providing that link so far
+    # Add to covered if the cleaned 2hop neighbors are the only ones providing
+    # that link so far
     for key, candidates in two_hop_coverage_summary.items():
         if len(candidates) == 1:
             mpr[candidates[0]] = 1
@@ -49,7 +52,7 @@ def mpr_heuristic(one_hop_neighbours_ids,
         reachability = dict()
         for neighbor in local_view.neighbors(agent_id):
             reachability[int(local_view.nodes[neighbor]['label'])] = sum(
-                local_view.nodes[neighbor]['features'].astype(int) & reachable_uncovered.astype(int))
+                local_view.nodes[neighbor]['one_hop'].astype(int) & reachable_uncovered.astype(int))
         max_reachability = [k for k, v in reachability.items() if v == max(reachability.values())]
         if len(max_reachability) == 1:
             key_to_add = max_reachability[0]
@@ -57,7 +60,7 @@ def mpr_heuristic(one_hop_neighbours_ids,
             reachable_uncovered = np.array([
                 0 if (value_n and value_unc) else value_unc for
                 value_n, value_unc in
-                zip(local_view.nodes[key_to_add]['features'], reachable_uncovered)])
+                zip(local_view.nodes[key_to_add]['one_hop'], reachable_uncovered)])
 
         elif len(max_reachability) > 1:
             key_to_add = max({k: d_y[k] for k in max_reachability})
@@ -65,12 +68,12 @@ def mpr_heuristic(one_hop_neighbours_ids,
             reachable_uncovered = np.array([
                 0 if (value_n and value_unc) else value_unc for
                 value_n, value_unc in
-                zip(local_view.nodes[key_to_add]['features'], reachable_uncovered)])
+                zip(local_view.nodes[key_to_add]['one_hop'], reachable_uncovered)])
 
     return mpr
 
 
-class MprAgentState:
+class State:
     def __init__(self):
         self.received_from = None
         self.transmitted_to = None
@@ -78,8 +81,15 @@ class MprAgentState:
         self.relayed_by = None
         self.message_origin = 0
 
+    def reset(self, num_agents):
+        self.received_from = np.zeros(num_agents)
+        self.transmitted_to = np.zeros(num_agents)
+        self.relays_for = np.zeros(num_agents)
+        self.relayed_by = np.zeros(num_agents)
+        self.message_origin = 0
 
-class MprAgent:
+
+class Agent:
     def __init__(self,
                  agent_id,
                  local_view,
@@ -91,7 +101,7 @@ class MprAgent:
         # state
         self.id = agent_id
         self.name = str(agent_id)
-        self.state = MprAgentState() if state is None else state
+        self.state = State() if state is None else state
         self.local_view = local_view
         self.geometric_data = from_networkx(local_view)
         self.size = size
@@ -99,40 +109,75 @@ class MprAgent:
         self.color = color
         self.one_hop_neighbours_ids = None
         self.two_hop_neighbours_ids = None
+        self.two_hop_cover = 0
+        self.gained_two_hop_cover = 0
         self.allowed_actions = None
         self.action = None
-        self.action_callback = mpr_heuristic if is_scripted else None
+        self.is_scripted = is_scripted
+        self.action_callback = mpr_heuristic if self.is_scripted else None
+        self.suppl_mpr = None
+        self.steps_taken = None
+        self.truncated = None
+        self.actions_history = np.zeros((4,))
 
     def reset(self, local_view, pos):
-        self.__init__(agent_id=self.id, local_view=local_view, state=self.state, pos=pos)
+        self.__init__(agent_id=self.id,
+                      local_view=local_view,
+                      state=self.state,
+                      pos=pos)
+
+    def update_local_view(self, local_view):
+        self.local_view = local_view
+        self.geometric_data = from_networkx(local_view)
 
     def has_received_from_relayed_node(self):
         return sum([received and relay for received, relay in
                     zip(self.state.received_from, self.state.relays_for)])
 
+    def update_two_hop_cover_from_one_hopper(self, agents):
+        two_hop_neighbor_indices = np.where(self.two_hop_neighbours_ids)[0]
 
-class MprWorld:
+        new_two_hop_cover = sum(
+            [1 for index in two_hop_neighbor_indices
+             if sum(list(agents[index].state.received_from))
+             or agents[index].state.message_origin
+             ]
+        )
+
+        self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
+        self.two_hop_cover = new_two_hop_cover
+
+
+# In this world the agents select if they are on the MPR set or not
+class World:
     # update state of the world
     def __init__(
             self,
             number_of_agents,
             radius,
             np_random,
-            seed=9,
             graph=None,
-            is_scripted=False
+            is_scripted=False,
+            is_testing=False,
+            random_graph=False
     ):
-        self.messages_transmitted = 0
+        # Includes origin message
+        self.messages_transmitted = 1
+        self.origin_agent = None
         self.num_agents = number_of_agents
         self.radius = radius
-        self.graph = create_connected_graph(n=self.num_agents, radius=self.radius, seed=seed) if graph is None else graph
+        self.graph = graph
+        self.is_graph_fixed = True if graph else False
         self.is_scripted = is_scripted
-        self.random_structure = False if graph else True
-
-        self.agents = [MprAgent(i, nx.ego_graph(self.graph, i, undirected=True), is_scripted=is_scripted)
-                       for i in range(number_of_agents)]
+        self.random_graph = random_graph
+        self.agents = None
         self.np_random = np_random
-        self.reset(seed)
+        self.is_testing = is_testing
+        if self.is_testing:
+            self.graphs = glob.glob(constants.TESTING_PATH)
+        else:
+            self.graphs = glob.glob(constants.TRAINING_PATH)
+        self.reset()
 
     # return all agents controllable by external policies
     @property
@@ -149,104 +194,125 @@ class MprWorld:
     def step(self):
         # set actions for scripted agents
         for agent in self.scripted_agents:
-            agent.action = agent.action_callback(agent.one_hop_neighbours_ids,
-                                                 agent.two_hop_neighbours_ids,
-                                                 agent.id,
-                                                 agent.local_view)
+            agent.suppl_mpr = agent.action_callback(agent.one_hop_neighbours_ids,
+                                                    agent.two_hop_neighbours_ids,
+                                                    agent.id,
+                                                    agent.local_view)
+            relay_indices = np.where(agent.suppl_mpr)[0]
 
-        # Set MPRs
-        for agent in self.agents:
-            self.set_relays(agent)
+            for index in relay_indices:
+                self.agents[index].state.relays_for[agent.id] = 1
+
+        for agent in self.scripted_agents:
+            if (agent.has_received_from_relayed_node()
+                or agent.state.message_origin) \
+                    and not sum(agent.state.transmitted_to):
+                agent.action = 1
+            else:
+                agent.action = 0
 
         # Send message
         for agent in self.agents:
-            logging.debug(f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}")
+            logging.debug(f"Agent {agent.name} Action: {agent.action} "
+                          f"with Neigh: {agent.one_hop_neighbours_ids}")
             self.update_agent_state(agent)
 
-    def set_relays(self, agent):
-        if agent.action is not None:
-            agent.state.relayed_by = agent.action
+        for agent in self.agents:
+            self.update_local_graph(agent)
 
-            neighbour_indices = [i for i, x in
-                                 enumerate(agent.one_hop_neighbours_ids) if
-                                 x == 1]
-            relay_indices = [i for i, x in enumerate(agent.state.relayed_by)
-                             if x == 1]
-            # Assert relays are subset of one hope neighbours of the agent
-            assert (set(relay_indices) <= set(neighbour_indices))
-            for index, value in enumerate(agent.state.relayed_by):
-                self.agents[index].state.relays_for[agent.id] = value
+    def update_local_graph(self, agent):
+        agent.local_view = nx.ego_graph(self.graph,
+                                        agent.id,
+                                        undirected=True)
 
     def update_agent_state(self, agent):
         # if it has received from a relay node or is message origin
         # and has not already transmitted the message
-        if (agent.has_received_from_relayed_node() or agent.state.message_origin)\
-                and not sum(agent.state.transmitted_to):
-            logging.debug(
-                f"Agent {agent.name} sending to Neighs: {agent.one_hop_neighbours_ids}")
-
-            agent.state.transmitted_to = agent.one_hop_neighbours_ids
+        if agent.action:
+            agent.state.transmitted_to += agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
-            neighbour_indices = [i for i, x in
-                                 enumerate(agent.one_hop_neighbours_ids) if
-                                 x == 1]
+            agent.actions_history[agent.steps_taken - 1] = agent.action
+            neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
             for index in neighbour_indices:
-                self.agents[index].state.received_from[agent.id] = 1
-        else:
-            logging.debug(f"Agent {agent.name} could not send")
+                self.agents[index].state.received_from[agent.id] += 1
 
-    def reset(self, seed):
-        if self.random_structure:
-            self.graph = create_connected_graph(n=self.num_agents, radius=self.radius, seed=seed)
+        # Update graph
+        self.graph.nodes[agent.id]['features'] = [
+            sum(agent.one_hop_neighbours_ids),
+            sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids),
+            agent.steps_taken
+        ]
 
+        self.graph.nodes[agent.id]['features'] = np.concatenate(
+            (self.graph.nodes[agent.id]['features'],
+             agent.actions_history)
+        )
+
+        agent.update_local_view(
+            local_view=nx.ego_graph(self.graph, agent.id,
+                                    undirected=True))
+        agent.update_two_hop_cover_from_one_hopper(self.agents)
+
+    def reset(self):
+        if self.random_graph:
+            self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
+        elif not self.is_graph_fixed:
+            self.graph = load_graph(
+                self.np_random.choice(self.graphs,
+                                      replace=False if self.is_testing else True
+                                      )
+            )
+
+        self.agents = [Agent(i,
+                             nx.ego_graph(self.graph, i, undirected=True),
+                             is_scripted=self.is_scripted)
+                       for i in range(self.num_agents)]
+        # Includes origin message
         self.messages_transmitted = 0
+        random_agent = self.agents[0] if self.is_testing else self.np_random.choice(self.agents)
+        self.origin_agent = random_agent.id
 
         for agent in self.agents:
-            agent.state.received_from = np.zeros(self.num_agents)
-            agent.state.transmitted_to = np.zeros(self.num_agents)
-            agent.state.relays_for = np.zeros(self.num_agents)
-            agent.state.relayed_by = np.zeros(self.num_agents)
-            agent.state.message_origin = 0
-
+            agent.state.reset(self.num_agents)
             one_hop_neighbours_ids = np.zeros(self.num_agents)
+
             for agent_index in self.graph.neighbors(agent.id):
                 one_hop_neighbours_ids[agent_index] = 1
-            self.graph.nodes[agent.id]['features'] = one_hop_neighbours_ids
+            self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
+            self.graph.nodes[agent.id]['features'] = np.zeros((7,))
             self.graph.nodes[agent.id]['label'] = agent.id
+            self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
 
-        actions_dim = np.zeros(self.num_agents)
-        actions_dim.fill(2)
+        actions_dim = np.ones(2)
         for agent in self.agents:
-            agent.reset(local_view=nx.ego_graph(self.graph, agent.id, undirected=True),
+            agent.reset(local_view=nx.ego_graph(self.graph,
+                                                agent.id,
+                                                undirected=True),
                         pos=self.graph.nodes[agent.id]['pos'])
-            agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['features']
-            agent.two_hop_neighbours_ids = np.zeros(self.num_agents)
+            agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['one_hop']
+            agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids
             for agent_index in self.graph.neighbors(agent.id):
-                agent.two_hop_neighbours_ids = self.graph.nodes[agent_index]['features'].astype(int) | agent.two_hop_neighbours_ids.astype(int)
+
+                agent.two_hop_neighbours_ids = np.logical_or(
+                    self.graph.nodes[agent_index]['one_hop'].astype(int),
+                    agent.two_hop_neighbours_ids.astype(int)
+                )
             agent.two_hop_neighbours_ids[agent.id] = 0
 
-            # Calc every combination of the agent's neighbours to get allowed actions
-            neighbours_combinations = list(itertools.product([0, 1], repeat=int(sum(agent.one_hop_neighbours_ids))))
-            indices = [i for i, x in enumerate(agent.one_hop_neighbours_ids) if x == 1]
+            agent.allowed_actions = [True] * int(np.sum(actions_dim))
+            agent.steps_taken = 0
+            agent.truncated = False
 
-            allowed_actions_mask = [False] * int(np.prod(actions_dim))
-            for element in neighbours_combinations:
-                allowed_action_binary = [0] * self.num_agents
-                for i in range(len(element)):
-                    allowed_action_binary[indices[i]] = element[i]
-
-                res = int("".join(str(x) for x in allowed_action_binary), 2)
-                allowed_actions_mask[res] = True
-
-            agent.allowed_actions = allowed_actions_mask
-
-        random_agent = self.np_random.choice(self.agents) if self.random_structure else self.agents[0]
         random_agent.state.message_origin = 1
+        random_agent.action = 1
+        random_agent.steps_taken += 1
+        self.update_agent_state(random_agent)
 
 
-def create_connected_graph(n, radius, seed):
+# TODO: investigate randomness
+def create_connected_graph(n, radius):
     while True:
-        graph = nx.random_geometric_graph(n=n, radius=radius, seed=seed)
+        graph = nx.random_geometric_graph(n=n, radius=radius)
         if nx.is_connected(graph):
             break
         else:
@@ -255,12 +321,12 @@ def create_connected_graph(n, radius, seed):
     return graph
 
 
-def load_testing_graph(path="testing_graph.gpickle"):
+def load_graph(path="testing_graph.gpickle"):
     with open(path, "rb") as input_file:
         graph = pickle.load(input_file)
     return graph
 
 
-def save_testing_graph(graph, path="testing_graph.gpickle"):
+def save_graph(graph, path="testing_graph.gpickle"):
     with open(path, "wb") as output_file:
         pickle.dump(graph, output_file)
