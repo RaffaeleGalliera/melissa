@@ -4,8 +4,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tianshou.utils.net.common import MLP
-from torch_geometric.nn import GATv2Conv
-from torch_geometric.nn import global_mean_pool
+from torch_geometric.nn import GATv2Conv, GAT
+from torch_geometric.nn import global_mean_pool, global_add_pool, global_max_pool
+
+from torch_geometric.data.data import Data
+from torch_geometric.data.batch import Batch as PyGeomBatch
+
+
+def to_pytorch_geometric_batch(obs, device):
+    observations = [Data(x=torch.as_tensor(observation[2],
+                                           device=device,
+                                           dtype=torch.float32),
+                         edge_index=torch.as_tensor(observation[0],
+                                                    device=device,
+                                                    dtype=torch.int)) for observation in obs.observation]
+    return PyGeomBatch.from_data_list(observations)
 
 
 class GATNetwork(nn.Module):
@@ -44,18 +57,12 @@ class GATNetwork(nn.Module):
             self.output_dim = self.Q.output_dim
 
     def forward(self, obs, state=None, info={}):
-        logits = []
-        for observation in obs.observation:
-            # TODO: Need here we move tensors to CUDA, cannot just put it in Batch because of data time -> slows down
-            x = torch.as_tensor(observation[2], device=self.device, dtype=torch.float32)
-            edge_index = torch.as_tensor(observation[0], device=self.device, dtype=torch.int)
-            x = self.conv1(x, edge_index)
-            x = F.relu(x)
-            x = x.view(x.size(0), -1)
-            x = global_mean_pool(x, None)
-            q, v = self.Q(x), self.V(x)
-            x = q - q.mean(dim=1, keepdim=True) + v
-            logits.append(x.flatten())
-        logits = torch.stack(logits)
-        return logits, state
+        obs = to_pytorch_geometric_batch(obs, self.device)
 
+        x, edge_index = obs.x, obs.edge_index
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = global_max_pool(x, batch=obs.batch)
+        q, v = self.Q(x), self.V(x)
+        x = q - q.mean(dim=1, keepdim=True) + v
+        return x, state

@@ -146,7 +146,7 @@ def watch(
 ) -> None:
     weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights", f"{args.model_name}")
 
-    env = DummyVectorEnv([lambda: get_env(is_testing=True)])
+    env = DummyVectorEnv([lambda: get_env(is_testing=True, render_mode='human')])
 
     if masp_policy is None:
         masp_policy = load_policy(weights_path, args, env)

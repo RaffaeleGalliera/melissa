@@ -215,6 +215,10 @@ class MultiAgentCollector(Collector):
                 ]
             )
 
+            # VDN Reward accumulation
+            for agent, observation, rews in zip(self.data.obs.agent_id, self.data.obs.obs.observation, rew):
+                rews[int(agent)] = np.sum(rews[observation[1].astype(int)])
+
             # This information will NOT update obs while updating its rewards
             # so it gives r and done referred to step t-1 and step t
             # FOR THE SAME AGENT
