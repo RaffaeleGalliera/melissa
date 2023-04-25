@@ -170,17 +170,26 @@ class GraphEnv(AECEnv):
     def observation(self, agent):
         agent_observation = agent.geometric_data
         one_hop_neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
+        active_one_hop = [neighbor for neighbor in one_hop_neighbor_indices if not self.world.agents[neighbor].truncated and str(neighbor) in self.agents]
 
         # Every entry needs to be wrapped in a Batch object, otherwise
         # we will have shape errors in the data replay buffer
         edge_index = np.asarray(agent_observation.edge_index, dtype=np.int32)
         features = np.asarray(agent_observation.features, dtype=np.float32)
 
+        # Whole network
+        network = from_networkx(self.world.graph)
+        network_edge_index = np.asarray(network.edge_index, dtype=np.int32)
+        network_features = np.asarray(network.features, dtype=np.float32)
+
         labels = np.asarray(agent_observation.label, dtype=object)
         data = Batch.stack([Batch(observation=edge_index),
                             Batch(observation=labels),
                             Batch(observation=features),
-                            Batch(observation=np.where(labels == agent.id))])
+                            Batch(observation=np.where(labels == agent.id)),
+                            Batch(observation=network_edge_index),
+                            Batch(observation=network_features),
+                            Batch(observation=active_one_hop)])
 
         agent.allowed_actions[1] = True if (sum(agent.state.received_from) or agent.state.message_origin) and not sum(agent.state.transmitted_to) else False
         # Message origin is handled before the first step, hence
@@ -267,16 +276,6 @@ class GraphEnv(AECEnv):
             # previous_agent = self.agent_selection
             self.current_actions = [None] * NUMBER_OF_AGENTS
 
-            n_received = sum(
-                [1 for agent in self.world.agents if
-                 sum(agent.state.received_from) or agent.state.message_origin]
-            )
-
-            if n_received == NUMBER_OF_AGENTS and self.render_mode == 'human':
-                print(
-                    f"Every agent has received the message, terminating in {self.num_moves}, "
-                    f"messages transmitted: {self.world.messages_transmitted}")
-
             if self.render_mode == 'human':
                 self.render()
 
@@ -333,20 +332,19 @@ class GraphEnv(AECEnv):
         two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
         assert(set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
 
-        reward = agent.gained_two_hop_cover
+        reward = agent.two_hop_cover / len(two_hop_neighbor_indices)
         if sum(agent.state.transmitted_to):
-            reward -= sum([1 for index in one_hop_neighbor_indices if
-                           sum(self.world.agents[index].state.transmitted_to)])
-        if agent.steps_taken == 4:
-            if not sum(agent.state.transmitted_to):
-                reward -= sum([1 for index in one_hop_neighbor_indices if
-                               sum(self.world.agents[
-                                       index].state.received_from) == 0
-                               or self.world.agents[
-                                   index].state.message_origin == 0])
+            penalty_1 = sum([sum(self.world.agents[index].state.transmitted_to)/len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if
+                             sum(self.world.agents[
+                                   index].state.transmitted_to)]) / len(one_hop_neighbor_indices)
+            reward = reward - penalty_1
+        if not sum(agent.state.transmitted_to):
+            penalty_2 = sum([1 for index in one_hop_neighbor_indices if
+                           sum(self.world.agents[index].state.received_from) == 0
+                           or self.world.agents[index].state.message_origin == 0]) / len(one_hop_neighbor_indices)
+            reward = reward - 3/4 * penalty_2
 
         return reward
-
 
 def make_env(raw_env):
     def env(**kwargs):

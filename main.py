@@ -2,7 +2,7 @@ import os
 import pprint
 
 import pytest
-from train import get_args, train_agent, watch, load_policy
+from train_mappo import get_args, train_agent, watch, load_policy
 import torch.multiprocessing as mp
 
 

@@ -8,13 +8,17 @@ import gym
 import gymnasium
 import numpy as np
 import torch
+from tianshou.utils.net.common import ActorCritic
+from tianshou.utils.net.discrete import Actor, Critic
+from torch.distributions import Independent, Normal
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.tensorboard import SummaryWriter
 
 from tianshou.data import VectorReplayBuffer
 from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
-from tianshou.policy import BasePolicy
-from tianshou.trainer import offpolicy_trainer
+from tianshou.policy import BasePolicy, DQNPolicy, PPOPolicy
+from tianshou.trainer import offpolicy_trainer, onpolicy_trainer
 
 from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
@@ -60,6 +64,19 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume-path", type=str, default=None)
     parser.add_argument("--resume-id", type=str, default=None)
+    parser.add_argument("--rew-norm", type=int, default=True)
+    # In theory, `vf-coef` will not make any difference if using Adam optimizer.
+    parser.add_argument("--repeat-per-collect", type=int, default=4)
+    parser.add_argument("--vf-coef", type=float, default=0.25)
+    parser.add_argument("--ent-coef", type=float, default=0.01)
+    parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument("--lr-decay", type=int, default=True)
+    parser.add_argument("--max-grad-norm", type=float, default=0.5)
+    parser.add_argument("--eps-clip", type=float, default=0.1)
+    parser.add_argument("--dual-clip", type=float, default=None)
+    parser.add_argument("--value-clip", type=int, default=1)
+    parser.add_argument("--norm-adv", type=int, default=1)
+    parser.add_argument("--recompute-adv", type=int, default=0)
     parser.add_argument(
         "--watch",
         default=False,
@@ -110,29 +127,65 @@ def get_agents(
     args.max_action = 1
 
     if policy is None:
-        # features
-        q_param = {"hidden_sizes": args.dueling_q_hidden_sizes}
-        v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
-
-        net = GATNetwork(
+        net_a = GATNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
-            device=args.device,
-            dueling_param=(q_param, v_param)
+            device=args.device
         )
+
+        net_c = GATNetwork(
+            NUMBER_OF_FEATURES,
+            args.hidden_emb,
+            args.action_shape,
+            args.num_heads,
+            is_critic=True,
+            device=args.device
+        )
+
+        actor = Actor(net_a, args.action_shape, device=args.device,
+                      softmax_output=False)
+        critic = Critic(net_c, device=args.device)
 
         optim = torch.optim.Adam(
-            net.parameters(), lr=args.lr
+            ActorCritic(actor, critic).parameters(), lr=args.lr, eps=1e-5
         )
 
-        policy = DQNPolicy(
-            net,
+        lr_scheduler = None
+        if args.lr_decay:
+            # decay learning rate to 0 linearly
+            max_update_num = np.ceil(
+                args.step_per_epoch / args.step_per_collect
+            ) * args.epoch
+
+            lr_scheduler = LambdaLR(
+                optim, lr_lambda=lambda epoch: 1 - epoch / max_update_num
+            )
+
+        # define policy
+        def dist(p):
+            return torch.distributions.Categorical(logits=p)
+
+        policy = PPOPolicy(
+            actor,
+            critic,
             optim,
-            args.gamma,
-            args.n_step,
-            target_update_freq=args.target_update_freq
+            dist,
+            discount_factor=args.gamma,
+            gae_lambda=args.gae_lambda,
+            max_grad_norm=args.max_grad_norm,
+            vf_coef=args.vf_coef,
+            ent_coef=args.ent_coef,
+            reward_normalization=args.rew_norm,
+            action_scaling=False,
+            lr_scheduler=lr_scheduler,
+            action_space=env.action_space,
+            eps_clip=args.eps_clip,
+            value_clip=args.value_clip,
+            dual_clip=args.dual_clip,
+            advantage_normalization=args.norm_adv,
+            recompute_advantage=args.recompute_adv,
         ).to(args.device)
 
     masp_policy = MultiAgentSharedPolicy(policy, env)
@@ -144,17 +197,19 @@ def watch(
     args: argparse.Namespace = get_args(),
     masp_policy: BasePolicy = None,
 ) -> None:
-    weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights", f"{args.model_name}")
+    weights_path = os.path.join(args.logdir, "mpr", 'ppo', "weights", f"{args.model_name}")
 
-    env = DummyVectorEnv([lambda: get_env(is_testing=True, render_mode='human')])
+    env = DummyVectorEnv([lambda: get_env(is_testing=True)])
 
     if masp_policy is None:
         masp_policy = load_policy(weights_path, args, env)
 
     masp_policy.policy.eval()
-    masp_policy.policy.set_eps(args.eps_test)
 
-    collector = MultiAgentCollector(masp_policy, env, exploration_noise=True, number_of_agents=NUMBER_OF_AGENTS)
+    collector = MultiAgentCollector(masp_policy,
+                                    env,
+                                    exploration_noise=True,
+                                    number_of_agents=NUMBER_OF_AGENTS)
     result = collector.collect(n_episode=args.test_num)
 
     pprint.pprint(result)
@@ -169,6 +224,7 @@ def train_agent(
     masp_policy: BasePolicy = None,
     optim: torch.optim.Optimizer = None,
 ) -> Tuple[dict, BasePolicy]:
+
     train_envs = SubprocVectorEnv([lambda: get_env() for i in range(args.training_num)])
     test_envs = SubprocVectorEnv([lambda: get_env(is_testing=True)])
 
@@ -199,61 +255,30 @@ def train_agent(
         exploration_noise=True,
         number_of_agents=len(agents)
     )
+
     # train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
-    log_path = os.path.join(args.logdir, 'mpr', 'dqn')
+    log_path = os.path.join(args.logdir, 'mpr', 'ppo')
     logger = CustomLogger(project='dancing_bees', name=args.model_name)
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
     logger.load(writer)
-    weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights")
+    weights_path = os.path.join(args.logdir, "mpr", 'ppo', "weights")
 
-    def save_best_fn(pol):
-        weights_name = os.path.join(
-            f"{weights_path}", f"{args.model_name}_best.pth"
-        )
-
-        print(f"Saving {args.model_name} Best")
-        torch.save(
-            pol.policy.state_dict(), weights_name
-        )
-
-    def stop_fn(mean_rewards):
-        # test_reward:  -4.84
-        return mean_rewards > -4.84
-
-    def train_fn(epoch, env_step):
-        eps = max(args.eps_train * (1 - 5e-6) ** env_step, args.eps_test)
-        masp_policy.policy.set_eps(eps)
-        if env_step % 1000 == 0:
-            logger.write("train/env_step", env_step, {"train/eps": eps})
-
-    def test_fn(epoch, env_step):
-        masp_policy.policy.set_eps(args.eps_test)
-
-    def reward_metric(rews):
-        return rews[:, 0]
-
-    # trainer
-    result = offpolicy_trainer(
+    result = onpolicy_trainer(
         masp_policy,
         train_collector,
         test_collector,
-        max_epoch=args.epoch,
-        step_per_epoch=args.step_per_epoch,
+        args.epoch,
+        args.step_per_epoch,
+        args.repeat_per_collect,
+        args.test_num,
+        args.batch_size,
         step_per_collect=args.step_per_collect,
-        episode_per_test=args.test_num,
-        batch_size=args.batch_size,
-        train_fn=train_fn,
-        test_fn=test_fn,
-        # reward_metric
-        # stop_fn=stop_fn,
-        update_per_step=args.update_per_step,
+        logger=logger,
         test_in_train=False,
-        save_best_fn=save_best_fn,
-        logger=logger
-        # resume_from_log=args.resume
     )
+    # trainer
 
     print(f"Saving {args.model_name} last")
     torch.save(
@@ -269,30 +294,63 @@ def load_policy(path, args, env):
 
     print(f"Loading agent under {path}")
     if os.path.exists(path):
-        # model
-        # features
-        q_param = {"hidden_sizes": args.dueling_q_hidden_sizes}
-        v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
-
-        net = GATNetwork(
+        net_a = GATNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
-            device=args.device,
-            dueling_param=(q_param, v_param)
+            device=args.device
         )
+        net_c = GATNetwork(
+            NUMBER_OF_FEATURES,
+            args.hidden_emb,
+            args.action_shape,
+            args.num_heads,
+            is_critic=True,
+            device=args.device
+        )
+        actor = Actor(net_a, args.action_shape, device=args.device,
+                      softmax_output=False)
+        critic = Critic(net_c, device=args.device)
 
         optim = torch.optim.Adam(
-            net.parameters(), lr=args.lr
+            ActorCritic(actor, critic).parameters(), lr=args.lr, eps=1e-5
         )
 
-        policy = DQNPolicy(
-            net,
+        lr_scheduler = None
+        if args.lr_decay:
+            # decay learning rate to 0 linearly
+            max_update_num = np.ceil(
+                args.step_per_epoch / args.step_per_collect
+            ) * args.epoch
+
+            lr_scheduler = LambdaLR(
+                optim, lr_lambda=lambda epoch: 1 - epoch / max_update_num
+            )
+
+        # define policy
+        def dist(p):
+            return torch.distributions.Categorical(logits=p)
+
+        policy = PPOPolicy(
+            actor,
+            critic,
             optim,
-            args.gamma,
-            args.n_step,
-            target_update_freq=args.target_update_freq
+            dist,
+            discount_factor=args.gamma,
+            gae_lambda=args.gae_lambda,
+            max_grad_norm=args.max_grad_norm,
+            vf_coef=args.vf_coef,
+            ent_coef=args.ent_coef,
+            reward_normalization=args.rew_norm,
+            action_scaling=False,
+            lr_scheduler=lr_scheduler,
+            action_space=env.action_space,
+            eps_clip=args.eps_clip,
+            value_clip=args.value_clip,
+            dual_clip=args.dual_clip,
+            advantage_normalization=args.norm_adv,
+            recompute_advantage=args.recompute_adv,
         ).to(args.device)
 
         masp_policy, _, _, = get_agents(args, policy, optim)

@@ -127,7 +127,12 @@ class Agent:
                       pos=pos)
 
     def update_local_view(self, local_view):
+        # Mask unavailable information
+        # one_hop_neighbor_indices = np.where(self.one_hop_neighbours_ids)[0]
+        # for index in one_hop_neighbor_indices:
+        #     local_view.nodes[index]['features'][2] = 0
         self.local_view = local_view
+
         self.geometric_data = from_networkx(local_view)
 
     def has_received_from_relayed_node(self):
@@ -221,9 +226,9 @@ class World:
             self.update_local_graph(agent)
 
     def update_local_graph(self, agent):
-        agent.local_view = nx.ego_graph(self.graph,
-                                        agent.id,
-                                        undirected=True)
+        agent.update_local_view(
+            local_view=nx.ego_graph(self.graph, agent.id,
+                                    undirected=True))
 
     def update_agent_state(self, agent):
         # if it has received from a relay node or is message origin
@@ -248,9 +253,9 @@ class World:
              agent.actions_history)
         )
 
-        agent.update_local_view(
-            local_view=nx.ego_graph(self.graph, agent.id,
-                                    undirected=True))
+        # agent.update_local_view(
+        #     local_view=nx.ego_graph(self.graph, agent.id,
+        #                             undirected=True))
         agent.update_two_hop_cover_from_one_hopper(self.agents)
 
     def reset(self):
