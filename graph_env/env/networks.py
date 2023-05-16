@@ -18,15 +18,14 @@ def to_pytorch_geometric_batch(obs, device, is_critic):
                                                dtype=torch.float32),
                              edge_index=torch.as_tensor(observation[4],
                                                         device=device,
-                                                        dtype=torch.int)) for
-                        observation in obs.obs.observation]
+                                                        dtype=torch.int)) for observation in obs.obs.observation]
     else:
         observations = [Data(x=torch.as_tensor(observation[2],
-                                           device=device,
-                                           dtype=torch.float32),
-                         edge_index=torch.as_tensor(observation[0],
-                                                    device=device,
-                                                    dtype=torch.int)) for observation in obs.obs.observation]
+                                               device=device,
+                                               dtype=torch.float32),
+                             edge_index=torch.as_tensor(observation[0],
+                                                        device=device,
+                                                        dtype=torch.int)) for observation in obs.obs.observation]
     return PyGeomBatch.from_data_list(observations)
 
 
@@ -45,8 +44,8 @@ class GATNetwork(nn.Module):
         self.output_dim = hidden_dim * num_heads
         self.hidden_dim = hidden_dim
         self.use_dueling = dueling_param is not None
-        self.conv1 = GATv2Conv(input_dim, hidden_dim, num_heads)
         self.is_critic = is_critic
+        self.conv1 = GATv2Conv(input_dim, hidden_dim, num_heads) if self.is_critic else GATv2Conv(input_dim - 1, hidden_dim, num_heads)
         if self.use_dueling:
             q_kwargs, v_kwargs = dueling_param
             q_output_dim, v_output_dim = 2, 1

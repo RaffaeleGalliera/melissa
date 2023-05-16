@@ -242,14 +242,24 @@ class World:
                 self.agents[index].state.received_from[agent.id] += 1
 
         # Update graph
-        self.graph.nodes[agent.id]['features'] = [
+        self.graph.nodes[agent.id]['features_critic'] = [
             sum(agent.one_hop_neighbours_ids),
             sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids),
             agent.steps_taken
         ]
 
-        self.graph.nodes[agent.id]['features'] = np.concatenate(
-            (self.graph.nodes[agent.id]['features'],
+        self.graph.nodes[agent.id]['features_actor'] = [
+            sum(agent.one_hop_neighbours_ids),
+            sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids)
+        ]
+
+        self.graph.nodes[agent.id]['features_critic'] = np.concatenate(
+            (self.graph.nodes[agent.id]['features_critic'],
+             agent.actions_history)
+        )
+
+        self.graph.nodes[agent.id]['features_actor'] = np.concatenate(
+            (self.graph.nodes[agent.id]['features_actor'],
              agent.actions_history)
         )
 
@@ -285,6 +295,8 @@ class World:
                 one_hop_neighbours_ids[agent_index] = 1
             self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
             self.graph.nodes[agent.id]['features'] = np.zeros((7,))
+            self.graph.nodes[agent.id]['features_actor'] = np.zeros((6,))
+            self.graph.nodes[agent.id]['features_critic'] = np.zeros((7,))
             self.graph.nodes[agent.id]['label'] = agent.id
             self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
 
@@ -296,14 +308,14 @@ class World:
                         pos=self.graph.nodes[agent.id]['pos'])
             agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['one_hop']
             agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids
-            for agent_index in self.graph.neighbors(agent.id):
 
+            for agent_index in self.graph.neighbors(agent.id):
                 agent.two_hop_neighbours_ids = np.logical_or(
                     self.graph.nodes[agent_index]['one_hop'].astype(int),
                     agent.two_hop_neighbours_ids.astype(int)
                 )
-            agent.two_hop_neighbours_ids[agent.id] = 0
 
+            agent.two_hop_neighbours_ids[agent.id] = 0
             agent.allowed_actions = [True] * int(np.sum(actions_dim))
             agent.steps_taken = 0
             agent.truncated = False
