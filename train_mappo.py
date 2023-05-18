@@ -83,12 +83,6 @@ def get_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="watch the play of pre-trained policy only"
     )
-    parser.add_argument(
-        "--wandb",
-        default=False,
-        action="store_true",
-        help="Set WANDB logger"
-    )
     parser.add_argument("--save-buffer-name", type=str, default=None)
     parser.add_argument("--model-name", type=str, default=datetime.datetime.now().strftime("%y%m%d-%H%M%S"))
 
@@ -231,6 +225,7 @@ def train_agent(
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
     train_envs.seed(args.seed)
     test_envs.seed(args.seed)
 
