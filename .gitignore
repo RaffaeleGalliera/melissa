@@ -238,3 +238,9 @@ fabric.properties
 
 # logs
 .log
+
+.DS_Store
+.idea/
+graph_topologies/
+log/
+wandb/

@@ -8,6 +8,7 @@ import logging
 import networkx as nx
 from torch_geometric.utils import from_networkx
 from . import constants
+import random
 
 
 # OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html
@@ -32,7 +33,7 @@ def mpr_heuristic(one_hop_neighbours_ids,
             clean_neighbor_neighbors[index] = 0
         # Calculate the coverage for two hop neighbors
         for index in [i for i, x in enumerate(two_hop_neighbours_ids.astype(
-                        int) & clean_neighbor_neighbors.astype(int)) if x == 1]:
+                int) & clean_neighbor_neighbors.astype(int)) if x == 1]:
             two_hop_coverage_summary[index].append(
                 int(local_view.nodes[neighbor]['label']))
         d_y[int(local_view.nodes[neighbor]['label'])] = sum(
@@ -127,7 +128,9 @@ class Agent:
                       pos=pos)
 
     def update_local_view(self, local_view):
+        # local_view is updated
         self.local_view = local_view
+        # Convert nx graph into torch tensor and save it in geometric_data param
         self.geometric_data = from_networkx(local_view)
 
     def has_received_from_relayed_node(self):
@@ -159,7 +162,8 @@ class World:
             graph=None,
             is_scripted=False,
             is_testing=False,
-            random_graph=False
+            random_graph=False,
+            dynamic_graph=False
     ):
         # Includes origin message
         self.messages_transmitted = 1
@@ -170,6 +174,7 @@ class World:
         self.is_graph_fixed = True if graph else False
         self.is_scripted = is_scripted
         self.random_graph = random_graph
+        self.dynamic_graph = dynamic_graph
         self.agents = None
         self.np_random = np_random
         self.is_testing = is_testing
@@ -236,10 +241,13 @@ class World:
             for index in neighbour_indices:
                 self.agents[index].state.received_from[agent.id] += 1
 
+        if self.dynamic_graph:
+            self.move_graph(step=0.01)
+
         # Update graph
         self.graph.nodes[agent.id]['features'] = [
             sum(agent.one_hop_neighbours_ids),
-            sum(agent.state.transmitted_to)/sum(agent.one_hop_neighbours_ids),
+            sum(agent.state.transmitted_to) / sum(agent.one_hop_neighbours_ids),
             agent.steps_taken
         ]
 
@@ -252,6 +260,25 @@ class World:
             local_view=nx.ego_graph(self.graph, agent.id,
                                     undirected=True))
         agent.update_two_hop_cover_from_one_hopper(self.agents)
+
+    def move_graph(self, step):
+        pos = nx.get_node_attributes(self.graph, "pos")
+        offset_x = [step * random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
+        offset_y = [step * random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
+        pos = {k: [v[0] + offset_x[k], v[1] + offset_y[k]] for k, v in pos.items()}
+        nx.set_node_attributes(self.graph, pos, "pos")
+        new_edges = nx.geometric_edges(self.graph, radius=constants.RADIUS_OF_INFLUENCE)
+        self.graph.remove_edges_from(list(self.graph.edges()))
+        self.graph.add_edges_from(new_edges)
+        for agent in self.agents:
+            one_hop_neighbours_ids = np.zeros(self.num_agents)
+            for agent_index in self.graph.neighbors(agent.id):
+                one_hop_neighbours_ids[agent_index] = 1
+            self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
+            self.graph.nodes[agent.id]['features'] = np.zeros((7,))
+            self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
+
+
 
     def reset(self):
         if self.random_graph:
@@ -292,7 +319,6 @@ class World:
             agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['one_hop']
             agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids
             for agent_index in self.graph.neighbors(agent.id):
-
                 agent.two_hop_neighbours_ids = np.logical_or(
                     self.graph.nodes[agent_index]['one_hop'].astype(int),
                     agent.two_hop_neighbours_ids.astype(int)

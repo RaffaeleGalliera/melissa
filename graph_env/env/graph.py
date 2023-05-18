@@ -35,7 +35,8 @@ class GraphEnv(AECEnv):
             local_ratio=None,
             is_scripted=False,
             is_testing=False,
-            random_graph=False
+            random_graph=False,
+            dynamic_graph=False
     ):
         super().__init__()
         self.seed()
@@ -52,7 +53,8 @@ class GraphEnv(AECEnv):
                            np_random=self.np_random,
                            is_scripted=False,
                            is_testing=is_testing,
-                           random_graph=random_graph)
+                           random_graph=random_graph,
+                           dynamic_graph=dynamic_graph)
 
         # Needs to be a string for assertions check in tianshou
         self.agents = [agent.name for agent in self.world.agents]
@@ -66,8 +68,8 @@ class GraphEnv(AECEnv):
         self.action_spaces = dict()
         self.observation_spaces = dict()
         state_dim = 0
+        obs_dim = NUMBER_OF_FEATURES
         for agent in self.world.agents:
-            obs_dim = NUMBER_OF_FEATURES
             self.observation_spaces[agent.name] = gymnasium.spaces.Dict({
                 'observation': gymnasium.spaces.Box(
                     low=0,
@@ -129,7 +131,7 @@ class GraphEnv(AECEnv):
                 color_map.append("yellow")
 
         nx.draw(self.world.graph, node_color=color_map, pos=pos, with_labels=True)
-        plt.pause(.0001)
+        plt.pause(1) # .0001
 
     def close(self):
         if self.renderOn:
