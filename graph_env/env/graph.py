@@ -123,7 +123,7 @@ class GraphEnv(AECEnv):
                 color_map.append('green')
             elif self.world.agents[node].state.message_origin:
                 color_map.append('blue')
-            elif sum(self.world.agents[node].state.transmitted_to) > sum(self.world.agents[node].one_hop_neighbours_ids):
+            elif self.world.agents[node].messages_transmitted > 1:
                 color_map.append('purple')
             elif sum(self.world.agents[node].state.transmitted_to):
                 color_map.append('red')

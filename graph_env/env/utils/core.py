@@ -119,6 +119,7 @@ class Agent:
         self.suppl_mpr = None
         self.steps_taken = None
         self.truncated = None
+        self.messages_transmitted = 0
         self.actions_history = np.zeros((4,))
 
     def reset(self, local_view, pos):
@@ -149,6 +150,13 @@ class Agent:
 
         self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
         self.two_hop_cover = new_two_hop_cover
+
+
+# Static method that calculate random movement for the agents if the graph is dynamic
+def compute_random_movement(step):
+    ox = [step * random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
+    oy = [step * random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
+    return ox, oy
 
 
 # In this world the agents select if they are on the MPR set or not
@@ -236,13 +244,15 @@ class World:
         if agent.action:
             agent.state.transmitted_to += agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
+            agent.messages_transmitted += 1
             agent.actions_history[agent.steps_taken - 1] = agent.action
             neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
             for index in neighbour_indices:
                 self.agents[index].state.received_from[agent.id] += 1
 
+        # Updates nodes positions and edges if the graph is dynamic
         if self.dynamic_graph:
-            self.move_graph(step=0.01)
+            self.update_position(step=0.005)
 
         # Update graph
         self.graph.nodes[agent.id]['features'] = [
@@ -261,24 +271,48 @@ class World:
                                     undirected=True))
         agent.update_two_hop_cover_from_one_hopper(self.agents)
 
-    def move_graph(self, step):
+    def update_position(self, step):
+        # Get current node positions
         pos = nx.get_node_attributes(self.graph, "pos")
-        offset_x = [step * random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
-        offset_y = [step * random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
+        # Given the step size, compute the x and y movement for each agent
+        offset_x, offset_y = compute_random_movement(step)
+        # Update positions of the agents
         pos = {k: [v[0] + offset_x[k], v[1] + offset_y[k]] for k, v in pos.items()}
         nx.set_node_attributes(self.graph, pos, "pos")
+
+        # Given the new positions, calculate the edges and update the graph
         new_edges = nx.geometric_edges(self.graph, radius=constants.RADIUS_OF_INFLUENCE)
         self.graph.remove_edges_from(list(self.graph.edges()))
         self.graph.add_edges_from(new_edges)
+
+        # Update agent embedded data after the graph movement
         for agent in self.agents:
-            one_hop_neighbours_ids = np.zeros(self.num_agents)
-            for agent_index in self.graph.neighbors(agent.id):
-                one_hop_neighbours_ids[agent_index] = 1
-            self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
-            self.graph.nodes[agent.id]['features'] = np.zeros((7,))
-            self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
+            self.update_one_hop_neighbors(agent)
+            self.update_two_hop_neighbors(agent)
 
+    def update_one_hop_neighbors(self, agent):
+        # Initialize one hop neighbors to zeros
+        one_hop_neighbours_ids = np.zeros(self.num_agents)
+        # Compute the neighbors one hop and save the information in an array
+        for agent_index in self.graph.neighbors(agent.id):
+            one_hop_neighbours_ids[agent_index] = 1
+        # One hop neighbors information is stored into the nodes of the graph
+        self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
+        self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
 
+    def update_two_hop_neighbors(self, agent):
+        # One hop neigh field is updated here because reset method resents every agent before calculating two hop neigh
+        agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['one_hop']
+        # One hop neighbors are two hop neighbors as well
+        agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids
+        # Calculate two hop neighbors
+        for agent_index in self.graph.neighbors(agent.id):
+            agent.two_hop_neighbours_ids = np.logical_or(
+                self.graph.nodes[agent_index]['one_hop'].astype(int),
+                agent.two_hop_neighbours_ids.astype(int)
+            )
+        # Agent can't be two hop neighbor of himself
+        agent.two_hop_neighbours_ids[agent.id] = 0
 
     def reset(self):
         if self.random_graph:
@@ -301,14 +335,9 @@ class World:
 
         for agent in self.agents:
             agent.state.reset(self.num_agents)
-            one_hop_neighbours_ids = np.zeros(self.num_agents)
-
-            for agent_index in self.graph.neighbors(agent.id):
-                one_hop_neighbours_ids[agent_index] = 1
-            self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
+            self.update_one_hop_neighbors(agent)
             self.graph.nodes[agent.id]['features'] = np.zeros((7,))
             self.graph.nodes[agent.id]['label'] = agent.id
-            self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
 
         actions_dim = np.ones(2)
         for agent in self.agents:
@@ -316,14 +345,7 @@ class World:
                                                 agent.id,
                                                 undirected=True),
                         pos=self.graph.nodes[agent.id]['pos'])
-            agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['one_hop']
-            agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids
-            for agent_index in self.graph.neighbors(agent.id):
-                agent.two_hop_neighbours_ids = np.logical_or(
-                    self.graph.nodes[agent_index]['one_hop'].astype(int),
-                    agent.two_hop_neighbours_ids.astype(int)
-                )
-            agent.two_hop_neighbours_ids[agent.id] = 0
+            self.update_two_hop_neighbors(agent)
 
             agent.allowed_actions = [True] * int(np.sum(actions_dim))
             agent.steps_taken = 0
