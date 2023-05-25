@@ -98,6 +98,7 @@ class Agent:
                  color=(0, 0, 0),
                  state=None,
                  pos=None,
+                 one_hop_neighbors_ids=None,
                  is_scripted=False):
         # state
         self.id = agent_id
@@ -108,7 +109,7 @@ class Agent:
         self.size = size
         self.pos = pos
         self.color = color
-        self.one_hop_neighbours_ids = None
+        self.one_hop_neighbours_ids = one_hop_neighbors_ids
         self.two_hop_neighbours_ids = None
         self.two_hop_cover = 0
         self.gained_two_hop_cover = 0
@@ -122,11 +123,12 @@ class Agent:
         self.messages_transmitted = 0
         self.actions_history = np.zeros((4,))
 
-    def reset(self, local_view, pos):
+    def reset(self, local_view, pos, one_hop_neighbours_ids):
         self.__init__(agent_id=self.id,
                       local_view=local_view,
                       state=self.state,
-                      pos=pos)
+                      pos=pos,
+                      one_hop_neighbors_ids=one_hop_neighbours_ids)
 
     def update_local_view(self, local_view):
         # local_view is updated
@@ -230,13 +232,15 @@ class World:
                           f"with Neigh: {agent.one_hop_neighbours_ids}")
             self.update_agent_state(agent)
 
+        # Updates nodes positions and edges if the graph is dynamic
+        if self.dynamic_graph:
+            self.move_graph()
+
+        for agent in self.agents:
+            self.update_agent_features(agent)
+
         for agent in self.agents:
             self.update_local_graph(agent)
-
-    def update_local_graph(self, agent):
-        agent.local_view = nx.ego_graph(self.graph,
-                                        agent.id,
-                                        undirected=True)
 
     def update_agent_state(self, agent):
         # if it has received from a relay node or is message origin
@@ -250,17 +254,13 @@ class World:
             for index in neighbour_indices:
                 self.agents[index].state.received_from[agent.id] += 1
 
-        # Updates nodes positions and edges if the graph is dynamic
-        if self.dynamic_graph:
-            self.update_position(step=0.005)
-
+    def update_agent_features(self, agent):
         # Update graph
         self.graph.nodes[agent.id]['features'] = [
             sum(agent.one_hop_neighbours_ids),
-            sum(agent.state.transmitted_to) / sum(agent.one_hop_neighbours_ids),
+            agent.messages_transmitted,
             agent.steps_taken
         ]
-
         self.graph.nodes[agent.id]['features'] = np.concatenate(
             (self.graph.nodes[agent.id]['features'],
              agent.actions_history)
@@ -269,7 +269,21 @@ class World:
         agent.update_local_view(
             local_view=nx.ego_graph(self.graph, agent.id,
                                     undirected=True))
+
         agent.update_two_hop_cover_from_one_hopper(self.agents)
+
+    def update_local_graph(self, agent):
+        agent.local_view = nx.ego_graph(self.graph,
+                                        agent.id,
+                                        undirected=True)
+
+    def move_graph(self):
+        self.update_position(step=constants.NODES_MOVEMENT_STEP)
+        # Update agent embedded data after the graph movement
+        for agent in self.agents:
+            self.update_one_hop_neighbors(agent)
+        for agent in self.agents:
+            self.update_two_hop_neighbors(agent)
 
     def update_position(self, step):
         # Get current node positions
@@ -279,16 +293,10 @@ class World:
         # Update positions of the agents
         pos = {k: [v[0] + offset_x[k], v[1] + offset_y[k]] for k, v in pos.items()}
         nx.set_node_attributes(self.graph, pos, "pos")
-
         # Given the new positions, calculate the edges and update the graph
         new_edges = nx.geometric_edges(self.graph, radius=constants.RADIUS_OF_INFLUENCE)
         self.graph.remove_edges_from(list(self.graph.edges()))
         self.graph.add_edges_from(new_edges)
-
-        # Update agent embedded data after the graph movement
-        for agent in self.agents:
-            self.update_one_hop_neighbors(agent)
-            self.update_two_hop_neighbors(agent)
 
     def update_one_hop_neighbors(self, agent):
         # Initialize one hop neighbors to zeros
@@ -299,10 +307,10 @@ class World:
         # One hop neighbors information is stored into the nodes of the graph
         self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
         self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
+        # One hop neigh field is updated here
+        agent.one_hop_neighbours_ids = one_hop_neighbours_ids
 
     def update_two_hop_neighbors(self, agent):
-        # One hop neigh field is updated here because reset method resents every agent before calculating two hop neigh
-        agent.one_hop_neighbours_ids = self.graph.nodes[agent.id]['one_hop']
         # One hop neighbors are two hop neighbors as well
         agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids
         # Calculate two hop neighbors
@@ -310,7 +318,7 @@ class World:
             agent.two_hop_neighbours_ids = np.logical_or(
                 self.graph.nodes[agent_index]['one_hop'].astype(int),
                 agent.two_hop_neighbours_ids.astype(int)
-            )
+            ).astype(int)
         # Agent can't be two hop neighbor of himself
         agent.two_hop_neighbours_ids[agent.id] = 0
 
@@ -344,7 +352,10 @@ class World:
             agent.reset(local_view=nx.ego_graph(self.graph,
                                                 agent.id,
                                                 undirected=True),
-                        pos=self.graph.nodes[agent.id]['pos'])
+                        pos=self.graph.nodes[agent.id]['pos'],
+                        one_hop_neighbours_ids=agent.one_hop_neighbours_ids
+                        )
+
             self.update_two_hop_neighbors(agent)
 
             agent.allowed_actions = [True] * int(np.sum(actions_dim))
@@ -354,7 +365,9 @@ class World:
         random_agent.state.message_origin = 1
         random_agent.action = 1
         random_agent.steps_taken += 1
+
         self.update_agent_state(random_agent)
+        self.update_agent_features(random_agent)
 
 
 # TODO: investigate randomness
