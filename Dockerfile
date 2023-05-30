@@ -30,4 +30,4 @@ WORKDIR /home/devuser/dev
 
 RUN pip install pyg-lib \
     torch-scatter \
-    torch-sparse -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html
+    torch-sparse -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html \

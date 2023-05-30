@@ -188,6 +188,7 @@ class World:
         self.agents = None
         self.np_random = np_random
         self.is_testing = is_testing
+        self.first_step_done = False
         if self.is_testing:
             self.graphs = glob.glob(constants.TESTING_PATH)
         else:
@@ -233,8 +234,10 @@ class World:
             self.update_agent_state(agent)
 
         # Updates nodes positions and edges if the graph is dynamic
-        if self.dynamic_graph:
+        if self.dynamic_graph and self.first_step_done:
             self.move_graph()
+
+        self.first_step_done = True
 
         for agent in self.agents:
             self.update_agent_features(agent)
@@ -293,9 +296,13 @@ class World:
         # Update positions of the agents
         pos = {k: [v[0] + offset_x[k], v[1] + offset_y[k]] for k, v in pos.items()}
         nx.set_node_attributes(self.graph, pos, "pos")
+        for i in range(constants.NUMBER_OF_AGENTS):
+            self.agents[i].pos[0] += offset_x[i]
+            self.agents[i].pos[1] += offset_y[i]
         # Given the new positions, calculate the edges and update the graph
         new_edges = nx.geometric_edges(self.graph, radius=constants.RADIUS_OF_INFLUENCE)
-        self.graph.remove_edges_from(list(self.graph.edges()))
+        old_edges = list(self.graph.edges())
+        self.graph.remove_edges_from(old_edges)
         self.graph.add_edges_from(new_edges)
 
     def update_one_hop_neighbors(self, agent):
@@ -366,6 +373,7 @@ class World:
         random_agent.action = 1
         random_agent.steps_taken += 1
 
+        self.first_step_done = False
         self.update_agent_state(random_agent)
         self.update_agent_features(random_agent)
 
