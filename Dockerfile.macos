@@ -1,4 +1,4 @@
-FROM nvcr.io/nvidia/pytorch:22.11-py3
+FROM python:3.8-bullseye
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -18,9 +18,6 @@ RUN apt-get update && \
 
 USER devuser
 
-ENV TORCH=1.13.0
-ENV CUDA='cu117'
-
 RUN mkdir /home/devuser/dev /home/devuser/app
 COPY requirements.txt /home/devuser/app/requirements.txt
 WORKDIR /home/devuser/app
@@ -28,6 +25,6 @@ RUN pip install -r requirements.txt
 COPY . /home/devuser/app
 WORKDIR /home/devuser/dev
 
-RUN pip install pyg-lib \
-    torch-scatter \
-    torch-sparse -f https://data.pyg.org/whl/torch-${TORCH}+${CUDA}.html \
+RUN pip install torch-scatter \
+    torch-sparse 
+

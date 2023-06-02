@@ -72,6 +72,7 @@ class MultiAgentCollector(Collector):
         n_step: Optional[int] = None,
         n_episode: Optional[int] = None,
         random: bool = False,
+        # TODO check this for fps-based render
         render: Optional[float] = None,
         no_grad: bool = True,
         gym_reset_kwargs: Optional[Dict[str, Any]] = None,

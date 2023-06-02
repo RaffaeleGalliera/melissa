@@ -1,5 +1,6 @@
 gym~=0.26.2
 numpy==1.23.5
+matplotlib==3.6.2
 torch~=1.13.0
 tianshou~=0.4.10
 pytest~=7.2.0
@@ -9,6 +10,3 @@ PettingZoo==1.22.2
 networkx~=2.8.8
 torch-geometric~=2.2.0
 wandb
-# pyg-lib
-# torch-scatter
-# torch-sparse

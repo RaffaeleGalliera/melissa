@@ -72,6 +72,14 @@ def get_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Set WANDB logger"
     )
+
+    parser.add_argument(
+        "--dynamic-graph",
+        default=False,
+        action="store_true",
+        help="Set WANDB logger"
+    )
+
     parser.add_argument("--save-buffer-name", type=str, default=None)
     parser.add_argument("--model-name", type=str, default=datetime.datetime.now().strftime("%y%m%d-%H%M%S"))
 
@@ -87,12 +95,14 @@ def get_env(number_of_agents=NUMBER_OF_AGENTS,
             radius=RADIUS_OF_INFLUENCE,
             graph=None,
             render_mode=None,
-            is_testing=False):
+            is_testing=False,
+            dynamic_graph=False):
     env = graph_env_v0.env(graph=graph,
                            render_mode=render_mode,
                            number_of_agents=number_of_agents,
                            radius=radius,
-                           is_testing=is_testing)
+                           is_testing=is_testing,
+                           dynamic_graph=dynamic_graph)
     return PettingZooEnv(env)
 
 
@@ -146,7 +156,7 @@ def watch(
 ) -> None:
     weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights", f"{args.model_name}")
 
-    env = DummyVectorEnv([lambda: get_env(is_testing=True, render_mode='human')])
+    env = DummyVectorEnv([lambda: get_env(is_testing=True, render_mode='human',dynamic_graph=args.dynamic_graph)])
 
     if masp_policy is None:
         masp_policy = load_policy(weights_path, args, env)
@@ -155,6 +165,7 @@ def watch(
     masp_policy.policy.set_eps(args.eps_test)
 
     collector = MultiAgentCollector(masp_policy, env, exploration_noise=True, number_of_agents=NUMBER_OF_AGENTS)
+    # TODO Send here fps to collector
     result = collector.collect(n_episode=args.test_num)
 
     pprint.pprint(result)
