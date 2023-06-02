@@ -5,13 +5,12 @@ import gymnasium
 import networkx as nx
 from gymnasium.utils import seeding
 from pettingzoo import AECEnv
-from pettingzoo.utils import wrappers, agent_selector
+from pettingzoo.utils import wrappers
 import numpy as np
 from tianshou.data.batch import Batch
-from .utils.constants import RADIUS_OF_INFLUENCE, NUMBER_OF_AGENTS, NUMBER_OF_FEATURES
-from .utils.core import Agent, World
+from .utils.constants import NUMBER_OF_AGENTS, NUMBER_OF_FEATURES, RENDER_PAUSE
+from .utils.core import World
 from .utils.selector import CustomSelector
-from torch_geometric.utils import from_networkx
 
 import matplotlib.pyplot as plt
 import math
@@ -88,7 +87,7 @@ class GraphEnv(AECEnv):
         self.state_space = gymnasium.spaces.Box(
             low=0,
             high=10,
-            shape=(state_dim, ),
+            shape=(state_dim,),
             dtype=np.float32,
         )
 
@@ -110,28 +109,11 @@ class GraphEnv(AECEnv):
             return
 
         if self.render_mode == "human" and self.world.agents:
-            self.draw_graph()
+            if self.world.dynamic_graph:
+                draw_graph(self.world.pre_move_graph, self.world.pre_move_agents)
+            draw_graph(self.world.graph, self.world.agents)
 
         return
-
-    def draw_graph(self):
-        plt.clf()
-        pos = nx.get_node_attributes(self.world.graph, "pos")
-        color_map = []
-        for node in self.world.graph:
-            if sum(self.world.agents[node].state.received_from) and not sum(self.world.agents[node].state.transmitted_to):
-                color_map.append('green')
-            elif self.world.agents[node].state.message_origin:
-                color_map.append('blue')
-            elif self.world.agents[node].messages_transmitted > 1:
-                color_map.append('purple')
-            elif sum(self.world.agents[node].state.transmitted_to):
-                color_map.append('red')
-            else:
-                color_map.append("yellow")
-
-        nx.draw(self.world.graph, node_color=color_map, pos=pos, with_labels=True)
-        plt.pause(1) # .0001
 
     def close(self):
         if self.renderOn:
@@ -153,7 +135,8 @@ class GraphEnv(AECEnv):
                key in self.agents) and len(self.agents) == 1:
             self.infos[self.agents[0]] = {'reset_all': True,
                                           'messages_transmitted': self.world.messages_transmitted,
-                                          'coverage': sum([1 for agent in self.world.agents if sum(agent.state.received_from) or agent.state.message_origin])/self.world.num_agents
+                                          'coverage': sum([1 for agent in self.world.agents if
+                                                           sum(agent.state.received_from) or agent.state.message_origin]) / self.world.num_agents
                                           }
         return self.observation(
             self.world.agents[self.agent_name_mapping[agent]]
@@ -184,10 +167,12 @@ class GraphEnv(AECEnv):
                             Batch(observation=features),
                             Batch(observation=np.where(labels == agent.id))])
 
-        agent.allowed_actions[1] = True if (sum(agent.state.received_from) or agent.state.message_origin) and not sum(agent.state.transmitted_to) else False
+        agent.allowed_actions[1] = True if (sum(agent.state.received_from) or agent.state.message_origin) and not sum(
+            agent.state.transmitted_to) else False
         # Message origin is handled before the first step, hence
         # there is no need to prohibit non transmission
-        agent.allowed_actions[0] = False if sum([1 for index in one_hop_neighbor_indices if sum(self.world.agents[index].one_hop_neighbours_ids) == 1]) and not sum(agent.state.transmitted_to) else True
+        agent.allowed_actions[0] = False if sum([1 for index in one_hop_neighbor_indices if sum(
+            self.world.agents[index].one_hop_neighbours_ids) == 1]) and not sum(agent.state.transmitted_to) else True
 
         agent_observation_with_mask = {
             "observation": data,
@@ -223,9 +208,9 @@ class GraphEnv(AECEnv):
     # Tianshou PettingZoo Wrapper returns the reward of every agent in a single
     # time not using CumulativeReward
     def step(self, action):
-        if(
-            self.terminations[self.agent_selection]
-            or self.truncations[self.agent_selection]
+        if (
+                self.terminations[self.agent_selection]
+                or self.truncations[self.agent_selection]
         ):
             self._was_dead_step(None)
             self._agent_selector.disable(self.agent_selection)
@@ -303,8 +288,8 @@ class GraphEnv(AECEnv):
             agent_reward = float(self.reward(agent))
             if self.local_ratio is not None:
                 reward = (
-                    global_reward * (1 - self.local_ratio)
-                    + agent_reward * self.local_ratio
+                        global_reward * (1 - self.local_ratio)
+                        + agent_reward * self.local_ratio
                 )
             else:
                 reward = agent_reward
@@ -333,7 +318,7 @@ class GraphEnv(AECEnv):
     def reward(self, agent):
         one_hop_neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
         two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
-        assert(set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
+        assert (set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
 
         reward = agent.gained_two_hop_cover
         if sum(agent.state.transmitted_to):
@@ -348,6 +333,26 @@ class GraphEnv(AECEnv):
                                    index].state.message_origin == 0])
 
         return reward
+
+
+def draw_graph(graph, agent_list):
+    plt.clf()
+    pos = nx.get_node_attributes(graph, "pos")
+    color_map = []
+    for node in graph:
+        if sum(agent_list[node].state.received_from) and not sum(agent_list[node].state.transmitted_to):
+            color_map.append('green')
+        elif agent_list[node].state.message_origin:
+            color_map.append('blue')
+        elif agent_list[node].messages_transmitted > 1:
+            color_map.append('purple')
+        elif sum(agent_list[node].state.transmitted_to):
+            color_map.append('red')
+        else:
+            color_map.append("yellow")
+
+    nx.draw(graph, node_color=color_map, pos=pos, with_labels=True)
+    plt.pause(RENDER_PAUSE)
 
 
 def make_env(raw_env):

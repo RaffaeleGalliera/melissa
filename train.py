@@ -165,6 +165,7 @@ def watch(
     masp_policy.policy.set_eps(args.eps_test)
 
     collector = MultiAgentCollector(masp_policy, env, exploration_noise=True, number_of_agents=NUMBER_OF_AGENTS)
+    # TODO Send here fps to collector
     result = collector.collect(n_episode=args.test_num)
 
     pprint.pprint(result)

@@ -1,14 +1,11 @@
+import copy
 import glob
-import itertools
 import pickle
-
 import numpy as np
 import logging
-
 import networkx as nx
 from torch_geometric.utils import from_networkx
 from . import constants
-import random
 
 
 # OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html
@@ -156,8 +153,8 @@ class Agent:
 
 # Static method that calculate random movement for the agents if the graph is dynamic
 def compute_random_movement(step):
-    ox = [step * random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
-    oy = [step * random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
+    ox = [step * np.random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
+    oy = [step * np.random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
     return ox, oy
 
 
@@ -188,7 +185,8 @@ class World:
         self.agents = None
         self.np_random = np_random
         self.is_testing = is_testing
-        self.first_step_done = False
+        self.pre_move_graph = None
+        self.pre_move_agents = None
         if self.is_testing:
             self.graphs = glob.glob(constants.TESTING_PATH)
         else:
@@ -234,19 +232,19 @@ class World:
             self.update_agent_state(agent)
 
         # Updates nodes positions and edges if the graph is dynamic
-        if self.dynamic_graph and self.first_step_done:
+        if self.dynamic_graph:
             self.move_graph()
 
-        self.first_step_done = True
-
+        # Features of agents are updated
         for agent in self.agents:
             self.update_agent_features(agent)
 
+        # Local graph of every agent is updated
         for agent in self.agents:
             self.update_local_graph(agent)
 
     def update_agent_state(self, agent):
-        # if it has received from a relay node or is message origin
+        # If it has received from a relay node or is message origin
         # and has not already transmitted the message
         if agent.action:
             agent.state.transmitted_to += agent.one_hop_neighbours_ids
@@ -281,7 +279,13 @@ class World:
                                         undirected=True)
 
     def move_graph(self):
+        # Graph and agent state is saved for visualization
+        self.pre_move_graph = self.graph.copy()
+        self.pre_move_agents = copy.deepcopy(self.agents)
+
+        # Move nodes and compute new edges
         self.update_position(step=constants.NODES_MOVEMENT_STEP)
+
         # Update agent embedded data after the graph movement
         for agent in self.agents:
             self.update_one_hop_neighbors(agent)
@@ -291,14 +295,17 @@ class World:
     def update_position(self, step):
         # Get current node positions
         pos = nx.get_node_attributes(self.graph, "pos")
+
         # Given the step size, compute the x and y movement for each agent
         offset_x, offset_y = compute_random_movement(step)
+
         # Update positions of the agents
         pos = {k: [v[0] + offset_x[k], v[1] + offset_y[k]] for k, v in pos.items()}
         nx.set_node_attributes(self.graph, pos, "pos")
         for i in range(constants.NUMBER_OF_AGENTS):
             self.agents[i].pos[0] += offset_x[i]
             self.agents[i].pos[1] += offset_y[i]
+
         # Given the new positions, calculate the edges and update the graph
         new_edges = nx.geometric_edges(self.graph, radius=constants.RADIUS_OF_INFLUENCE)
         old_edges = list(self.graph.edges())
@@ -308,24 +315,29 @@ class World:
     def update_one_hop_neighbors(self, agent):
         # Initialize one hop neighbors to zeros
         one_hop_neighbours_ids = np.zeros(self.num_agents)
+
         # Compute the neighbors one hop and save the information in an array
         for agent_index in self.graph.neighbors(agent.id):
             one_hop_neighbours_ids[agent_index] = 1
+
         # One hop neighbors information is stored into the nodes of the graph
         self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
         self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
+
         # One hop neigh field is updated here
         agent.one_hop_neighbours_ids = one_hop_neighbours_ids
 
     def update_two_hop_neighbors(self, agent):
         # One hop neighbors are two hop neighbors as well
         agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids
+
         # Calculate two hop neighbors
         for agent_index in self.graph.neighbors(agent.id):
             agent.two_hop_neighbours_ids = np.logical_or(
                 self.graph.nodes[agent_index]['one_hop'].astype(int),
                 agent.two_hop_neighbours_ids.astype(int)
             ).astype(int)
+
         # Agent can't be two hop neighbor of himself
         agent.two_hop_neighbours_ids[agent.id] = 0
 
@@ -373,7 +385,6 @@ class World:
         random_agent.action = 1
         random_agent.steps_taken += 1
 
-        self.first_step_done = False
         self.update_agent_state(random_agent)
         self.update_agent_features(random_agent)
 
