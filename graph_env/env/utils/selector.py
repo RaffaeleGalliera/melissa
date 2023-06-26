@@ -19,8 +19,11 @@ class CustomSelector:
         self.reinit(self.agents)
         return self.next()
 
+    def selectables(self):
+        return [key for key, values in self.agents.items() if values["active"] and not values["selected_round"]]
+
     def next(self):
-        self.selectable = [key for key, values in self.agents.items() if values["steps"] <= 4 and values["active"] and not values["selected_round"]]
+        self.selectable = self.selectables()
         if len(self.selectable):
             self.selected_agent = self.agents[self.selectable[0]]
             self.selected_agent['steps'] += 1
@@ -37,10 +40,10 @@ class CustomSelector:
         for agent in agents:
             self.agents[agent]["active"] = True if self.agents[agent]["steps"] < 4 else False
 
-    def new_round(self):
+    def start_new_round(self):
         for key, values in self.agents.items():
             values["selected_round"] = False
 
     def is_last(self):
         """Does not work as expected if you change the order."""
-        return True if not len(self.selectable) else False
+        return True if not len(self.selectables()) else False

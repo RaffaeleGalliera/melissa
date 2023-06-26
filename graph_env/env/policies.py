@@ -1,17 +1,16 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+import torch
 
-from tianshou.data import Batch, ReplayBuffer
-from tianshou.policy import BasePolicy
-
+from tianshou.data import Batch, ReplayBuffer, to_torch_as
+from tianshou.policy import BasePolicy, DQNPolicy
 try:
     from tianshou.env.pettingzoo_env import PettingZooEnv
 except ImportError:
     PettingZooEnv = None  # type: ignore
 
 
-# TODO: contains extra overhead, reduce it
 class MultiAgentSharedPolicy(BasePolicy):
     """Multi-agent shared policy manager for MARL.
 
@@ -53,8 +52,16 @@ class MultiAgentSharedPolicy(BasePolicy):
                 continue
             tmp_batch, tmp_indice = batch[agent_index], indice[agent_index]
             if has_rew:
+                tmp_batch['rew_list'] = tmp_batch.rew
+                valid_indices = np.where(tmp_batch.info.indices >= 0)
+
+                tmp_batch['active_obs'] = buffer._meta[tmp_batch.info.indices][valid_indices]
+                tmp_batch['active_obs'].rew = save_rew[tmp_batch.info.indices[valid_indices], tmp_batch['active_obs'].obs.agent_id.astype(int)]
+                tmp_batch['active_obs'].index = tmp_batch.info.indices[valid_indices]
+
                 tmp_batch.rew = tmp_batch.rew[:, self.agent_idx[agent]]
                 buffer._meta.rew = save_rew[:, self.agent_idx[agent]]
+                tmp_batch['active_obs'] = self.policy.process_fn(tmp_batch['active_obs'], buffer, tmp_batch.info.indices[valid_indices])
             if not hasattr(tmp_batch.obs, "mask"):
                 if hasattr(tmp_batch.obs, 'obs'):
                     tmp_batch.obs = tmp_batch.obs.obs
@@ -165,4 +172,45 @@ class MultiAgentSharedPolicy(BasePolicy):
 
         :return: policy loss
         """
+
         return self.policy.learn(Batch.cat([batch[agent_id] for agent_id in self.agents if not batch[agent_id].is_empty()]))
+
+
+class NVDNPolicy(DQNPolicy):
+    """VDN policy.  https://arxiv.org/abs/1706.02275 restristed to one-hop neighbours only"""
+
+    def learn(self, batch: Batch, **kwargs: Any) -> Dict[str, float]:
+        if self._target and self._iter % self._freq == 0:
+            self.sync_weight()
+        self.optim.zero_grad()
+        weight = batch.pop("weight", 1.0)
+        batch_q = torch.zeros((len(batch), ), device='cuda')
+        batch_returns = torch.zeros((len(batch), ), device='cuda')
+
+        for exp, i in zip(batch, range(len(batch))):
+            # Get indices from valid local graph ids only (1-hop neighbours and self)
+            valid_indices = np.intersect1d(np.where(exp.info.indices >= 0), exp.obs.obs.observation[1]).astype(int)
+            neighbour_obs = batch.active_obs[np.where(np.isin(exp.info.indices[valid_indices], exp.info.indices))[0]]
+            q = self(neighbour_obs).logits
+            q = q[np.arange(len(q)), neighbour_obs.act]
+
+            returns = to_torch_as(neighbour_obs.rew.flatten(), q)
+            sum_q = q.sum()
+            sum_returns = returns.sum()
+            batch_q[i] = sum_q
+            batch_returns[i] = sum_returns
+
+        td_error = batch_returns - batch_q
+
+        if self._clip_loss_grad:
+            y = batch_q.reshape(-1, 1)
+            t = batch_returns.reshape(-1, 1)
+            loss = torch.nn.functional.huber_loss(y, t, reduction="mean")
+        else:
+            loss = (td_error.pow(2) * weight).mean()
+
+        batch.weight = td_error  # prio-buffer
+        loss.backward()
+        self.optim.step()
+        self._iter += 1
+        return {"loss": loss.item()}

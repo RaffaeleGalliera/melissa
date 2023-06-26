@@ -11,6 +11,7 @@ from tianshou.data.batch import Batch
 from .utils.constants import NUMBER_OF_AGENTS, NUMBER_OF_FEATURES, RENDER_PAUSE
 from .utils.core import World
 from .utils.selector import CustomSelector
+from torch_geometric.utils import from_networkx
 
 import matplotlib.pyplot as plt
 import math
@@ -45,6 +46,7 @@ class GraphEnv(AECEnv):
         self.renderOn = False
         self.local_ratio = local_ratio
         self.radius = radius
+        self.is_new_round = None
 
         self.world = World(graph=graph,
                            number_of_agents=number_of_agents,
@@ -136,8 +138,16 @@ class GraphEnv(AECEnv):
             self.infos[self.agents[0]] = {'reset_all': True,
                                           'messages_transmitted': self.world.messages_transmitted,
                                           'coverage': sum([1 for agent in self.world.agents if
-                                                           sum(agent.state.received_from) or agent.state.message_origin]) / self.world.num_agents
+                                                           sum(agent.state.received_from) or agent.state.message_origin]) / self.world.num_agents,
+                                          'environment_step': True # Unload the collector sub-buffer
                                           }
+            self.is_new_round = False
+
+        # Todo: Need to fix resetting of the environment doesn't issue environment_step
+        if self.is_new_round:
+            self.infos[self.agent_selection]['environment_step'] = True
+            self.is_new_round = False
+
         return self.observation(
             self.world.agents[self.agent_name_mapping[agent]]
         )
@@ -155,17 +165,27 @@ class GraphEnv(AECEnv):
     def observation(self, agent):
         agent_observation = agent.geometric_data
         one_hop_neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
+        active_one_hop = [neighbor for neighbor in one_hop_neighbor_indices if not self.world.agents[neighbor].truncated and str(neighbor) in self.agents]
 
         # Every entry needs to be wrapped in a Batch object, otherwise
         # we will have shape errors in the data replay buffer
         edge_index = np.asarray(agent_observation.edge_index, dtype=np.int32)
         features = np.asarray(agent_observation.features, dtype=np.float32)
 
+        # Store Network for Total/Neighbourhood-wise VDN
+        # network = networkx.ego_graph(self.world.graph, agent.id, undirected=True, radius=2)
+        network = from_networkx(self.world.graph)
+        network_edge_index = np.asarray(network.edge_index, np.int32)
+        network_features = np.asarray(network.features, dtype=np.float32)
+
         labels = np.asarray(agent_observation.label, dtype=object)
         data = Batch.stack([Batch(observation=edge_index),
                             Batch(observation=labels),
                             Batch(observation=features),
-                            Batch(observation=np.where(labels == agent.id))])
+                            Batch(observation=np.where(labels == agent.id)),
+                            Batch(observation=network_edge_index),
+                            Batch(observation=network_features),
+                            Batch(observation=active_one_hop)])
 
         agent.allowed_actions[1] = True if (sum(agent.state.received_from) or agent.state.message_origin) and not sum(
             agent.state.transmitted_to) else False
@@ -230,6 +250,7 @@ class GraphEnv(AECEnv):
 
         self.agent_selection = self._agent_selector.next()
         if not self.agent_selection:
+            self.infos[current_agent] = {}
             self._accumulate_rewards()
             self._clear_rewards()
             self._execute_world_step()
@@ -248,7 +269,8 @@ class GraphEnv(AECEnv):
                                not agent.state.message_origin and
                                agent.name in self.terminations)]
             self._agent_selector.enable(self.agents)
-            self._agent_selector.new_round()
+            self._agent_selector.start_new_round()
+            self.is_new_round = True
             self.agent_selection = self._agent_selector.next()
 
             # previous_agent = self.agent_selection
@@ -280,7 +302,7 @@ class GraphEnv(AECEnv):
         self.world.step()
 
         global_reward = 0.0
-        # TODO: exp with local ratio
+
         if self.local_ratio is not None:
             global_reward = float(self.global_reward())
 

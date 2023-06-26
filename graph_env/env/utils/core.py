@@ -381,15 +381,15 @@ class World:
             agent.steps_taken = 0
             agent.truncated = False
 
+            self.update_agent_features(agent)
+
         random_agent.state.message_origin = 1
         random_agent.action = 1
         random_agent.steps_taken += 1
 
-        self.update_agent_state(random_agent)
-        self.update_agent_features(random_agent)
+        self.step()
 
 
-# TODO: investigate randomness
 def create_connected_graph(n, radius):
     while True:
         graph = nx.random_geometric_graph(n=n, radius=radius)
