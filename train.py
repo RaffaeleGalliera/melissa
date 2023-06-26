@@ -22,7 +22,7 @@ from graph_env.env.utils.core import load_graph
 from graph_env.env.utils.logger import CustomLogger
 
 from graph_env.env.networks import GATNetwork
-from graph_env.env.policies import MultiAgentSharedPolicy
+from graph_env.env.policies import MultiAgentSharedPolicy, NVDNPolicy
 
 from graph_env.env.collector import MultiAgentCollector
 
@@ -137,7 +137,7 @@ def get_agents(
             net.parameters(), lr=args.lr
         )
 
-        policy = DQNPolicy(
+        policy = NVDNPolicy(
             net,
             optim,
             args.gamma,
