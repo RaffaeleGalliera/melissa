@@ -188,9 +188,11 @@ class NVDNPolicy(DQNPolicy):
         batch_returns = torch.zeros((len(batch), ), device='cuda')
 
         for exp, i in zip(batch, range(len(batch))):
-            # Get indices from valid local graph ids only (1-hop neighbours and self)
+            # Get ID indices of batch active obs and intersect with valid neighbours
             valid_indices = np.intersect1d(np.where(exp.info.indices >= 0), exp.obs.obs.observation[1]).astype(int)
-            neighbour_obs = batch.active_obs[np.where(np.isin(exp.info.indices[valid_indices], exp.info.indices))[0]]
+
+            # Get active neighbour obs from batch filtering by obs index
+            neighbour_obs = batch.active_obs[np.where(np.isin(batch.active_obs.index, exp.info.indices[valid_indices]))[0]]
             q = self(neighbour_obs).logits
             q = q[np.arange(len(q)), neighbour_obs.act]
 
