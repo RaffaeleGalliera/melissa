@@ -52,16 +52,16 @@ class MultiAgentSharedPolicy(BasePolicy):
                 continue
             tmp_batch, tmp_indice = batch[agent_index], indice[agent_index]
             if has_rew:
-                tmp_batch['rew_list'] = tmp_batch.rew
+                tmp_batch.rew_list = tmp_batch.rew
                 valid_indices = np.where(tmp_batch.info.indices >= 0)
 
-                tmp_batch['active_obs'] = buffer._meta[tmp_batch.info.indices][valid_indices]
-                tmp_batch['active_obs'].rew = save_rew[tmp_batch.info.indices[valid_indices], tmp_batch['active_obs'].obs.agent_id.astype(int)]
-                tmp_batch['active_obs'].index = tmp_batch.info.indices[valid_indices]
+                tmp_batch.active_obs = buffer._meta[tmp_batch.info.indices[valid_indices]]
+                tmp_batch.active_obs.rew = save_rew[tmp_batch.info.indices[valid_indices], tmp_batch.active_obs.obs.agent_id.astype(int)]
+                tmp_batch.active_obs.index = tmp_batch.info.indices[valid_indices]
 
                 tmp_batch.rew = tmp_batch.rew[:, self.agent_idx[agent]]
                 buffer._meta.rew = save_rew[:, self.agent_idx[agent]]
-                tmp_batch['active_obs'] = self.policy.process_fn(tmp_batch['active_obs'], buffer, tmp_batch.info.indices[valid_indices])
+                tmp_batch.active_obs = self.policy.process_fn(tmp_batch.active_obs, buffer, tmp_batch.info.indices[valid_indices])
             if not hasattr(tmp_batch.obs, "mask"):
                 if hasattr(tmp_batch.obs, 'obs'):
                     tmp_batch.obs = tmp_batch.obs.obs
@@ -177,7 +177,8 @@ class MultiAgentSharedPolicy(BasePolicy):
 
 
 class NVDNPolicy(DQNPolicy):
-    """VDN policy.  https://arxiv.org/abs/1706.02275 restristed to one-hop neighbours only"""
+    """VDN policy.
+     https://arxiv.org/abs/1706.02275 restricted to one-hop neighbours only"""
 
     def learn(self, batch: Batch, **kwargs: Any) -> Dict[str, float]:
         if self._target and self._iter % self._freq == 0:
@@ -187,7 +188,7 @@ class NVDNPolicy(DQNPolicy):
         batch_q = torch.zeros((len(batch), ), device='cuda')
         batch_returns = torch.zeros((len(batch), ), device='cuda')
 
-        for exp, i in zip(batch, range(len(batch))):
+        for i, exp in enumerate(batch):
             # Get ID indices of batch active obs and intersect with valid neighbours
             valid_indices = np.intersect1d(np.where(exp.info.indices >= 0), exp.obs.obs.observation[1]).astype(int)
 

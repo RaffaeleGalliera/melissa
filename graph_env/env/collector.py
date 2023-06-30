@@ -253,52 +253,52 @@ class MultiAgentCollector(Collector):
                 if render > 0 and not np.isclose(render, 0):
                     time.sleep(render)
 
-            self.envs_to_step_exps = Batch.cat((self.envs_to_step_exps, self.data))
+            self.envs_to_step_exps = Batch.cat(
+                (self.envs_to_step_exps, self.data))
 
             if self.environment_step.any():
                 stepping_envs = np.where(self.environment_step)[0]
-                # Step every time all the agents of the environment have stepped
                 step_count += len(stepping_envs)
 
-                # Extract the experiences of the current environment and add the complete actions
-                for env_id in stepping_envs:
-                    exps = self.envs_to_step_exps[
-                        self.envs_to_step_exps.info.env_id == env_id]
-                    buffer_ids = (exps.info.env_id * self.number_of_agents) + exps.obs.agent_id.astype(int)
+                envs_to_step_exps_indices = self.envs_to_step_exps.info.env_id
 
-                    # List of future indices
-                    exps_indices = [x.last_index + self.buffer._offset[i] for
-                                    x, i in zip(self.buffer.buffers[buffer_ids],
-                                                buffer_ids)]
+                # Filter experiences for the stepping environments
+                exps = self.envs_to_step_exps[np.isin(envs_to_step_exps_indices,
+                                                      stepping_envs)]
 
-                    # Update indices for VDN
-                    indices = np.full((self.number_of_agents,), -1, dtype=np.int64)
-                    for exp, exp_index in zip(exps, exps_indices):
-                        indices[int(exp.obs.agent_id)] = exp_index
-                    exps.info.update(indices=[indices])
+                # Calculate buffer_ids and exps_indices in a vectorized manner
+                buffer_ids = (exps.info.env_id * self.number_of_agents) + exps.obs.agent_id.astype(int)
+                exps_indices = np.array([x.last_index + self.buffer._offset[i] for
+                                x, i in zip(self.buffer.buffers[buffer_ids],
+                                            buffer_ids)]).flatten()
+                # Update indices for VDN
+                indices = np.full((self.env_num, self.number_of_agents), -1, dtype=np.int64)
+                row_indices = exps.info.env_id
+                col_indices = exps.obs.agent_id.astype(int)
+                indices[row_indices, col_indices] = exps_indices
 
-                    # Add experiences to buffer
-                    ptr, ep_rew, ep_len, ep_idx = self.buffer.add(
-                        exps,
-                        buffer_ids=(buffer_ids)
-                    )
+                exps.info.update(indices=indices[exps.info.env_id])
 
-                    # Ensure unique agent IDs
-                    assert len(exps.obs.agent_id) == len(set(exps.obs.agent_id))
+                # Add experiences to buffer
+                ptr, ep_rew, ep_len, ep_idx = self.buffer.add(
+                    exps,
+                    buffer_ids=buffer_ids
+                )
 
-                    # Add stats for done environments
-                    if np.any(exps.done):
-                        done_envs = np.where(exps.done)[0]
-                        episode_count += len(done_envs)
-                        episode_lens.append(ep_len[done_envs])
-                        episode_rews.append(ep_rew[done_envs])
-                        episode_start_indices.append(ep_idx[done_envs])
+                # Check that we don't have multiple entries for the same env, agent_id tuple
+                assert len(list(zip(exps.obs.agent_id, exps.info.env_id))) == len(set(zip(exps.obs.agent_id, exps.info.env_id)))
 
-                    assert not np.any(ep_len > 5)
-
-                    # Remove experiences from envs_to_step_exps
-                    self.envs_to_step_exps = self.envs_to_step_exps[
-                        self.envs_to_step_exps.info.env_id != env_id]
+                # Add stats for done environments
+                if np.any(exps.done):
+                    done_eps = np.where(exps.done)[0]
+                    episode_count += len(done_eps)
+                    episode_lens.append(ep_len[done_eps])
+                    episode_rews.append(ep_rew[done_eps])
+                    episode_start_indices.append(ep_idx[done_eps])
+                assert not np.any(ep_len > 5)
+                # Remove experiences from envs_to_step_exps
+                self.envs_to_step_exps = self.envs_to_step_exps[
+                    ~np.isin(envs_to_step_exps_indices, stepping_envs)]
 
             # episode rews should be gathered when an agent's episode is done not
             # when everyone resets
