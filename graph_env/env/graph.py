@@ -202,7 +202,7 @@ class GraphEnv(AECEnv):
         return data
 
     def reset(self, seed=None, return_info=False, options=None):
-        # TODO check that workers seed is set from train.py
+        # TODO check that workers seed is set from train_nvdn.py
         if seed is not None:
             self.seed(seed=seed)
         self.world.np_random = self.np_random

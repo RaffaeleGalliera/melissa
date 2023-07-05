@@ -22,7 +22,7 @@ import copy
 from tianshou.data.collector import Collector
 
 
-class MultiAgentCollector(Collector):
+class MultiAgentCollaborativeCollector(Collector):
     def \
             __init__(
             self,

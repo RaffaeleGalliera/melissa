@@ -18,13 +18,14 @@ from tianshou.trainer import offpolicy_trainer
 
 from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
-from graph_env.env.utils.core import load_graph
 from graph_env.env.utils.logger import CustomLogger
 
 from graph_env.env.networks import GATNetwork
-from graph_env.env.policies import MultiAgentSharedPolicy, NVDNPolicy
+from graph_env.env.utils.policies.multi_agent_managers.collaborative_shared_policy import MultiAgentCollaborativeSharedPolicy
+from graph_env.env.utils.policies.nvdn import NVDNPolicy
 
-from graph_env.env.collector import MultiAgentCollector
+from graph_env.env.utils.collectors.collaborative_collector import MultiAgentCollaborativeCollector
+from pathlib import Path
 
 import time
 import warnings
@@ -145,7 +146,7 @@ def get_agents(
             target_update_freq=args.target_update_freq
         ).to(args.device)
 
-    masp_policy = MultiAgentSharedPolicy(policy, env)
+    masp_policy = MultiAgentCollaborativeSharedPolicy(policy, env)
 
     return masp_policy, optim, env.agents
 
@@ -164,7 +165,7 @@ def watch(
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
 
-    collector = MultiAgentCollector(masp_policy, env, exploration_noise=True, number_of_agents=NUMBER_OF_AGENTS)
+    collector = MultiAgentCollaborativeCollector(masp_policy, env, exploration_noise=True, number_of_agents=NUMBER_OF_AGENTS)
     # TODO Send here fps to collector
     result = collector.collect(n_episode=args.test_num)
 
@@ -192,7 +193,7 @@ def train_agent(
     masp_policy, optim, agents = get_agents(args, policy=masp_policy, optim=optim)
 
     # collector
-    train_collector = MultiAgentCollector(
+    train_collector = MultiAgentCollaborativeCollector(
         masp_policy,
         train_envs,
         VectorReplayBuffer(args.buffer_size,
@@ -201,7 +202,7 @@ def train_agent(
         exploration_noise=True,
         number_of_agents=len(agents)
     )
-    test_collector = MultiAgentCollector(
+    test_collector = MultiAgentCollaborativeCollector(
         masp_policy,
         test_envs,
         VectorReplayBuffer(args.buffer_size,
@@ -212,12 +213,13 @@ def train_agent(
     )
     # train_collector.collect(n_step=args.batch_size * args.training_num)
     # log
-    log_path = os.path.join(args.logdir, 'mpr', 'dqn')
+    log_path = os.path.join(args.logdir, 'mpr', 'nvdn')
     logger = CustomLogger(project='dancing_bees', name=args.model_name)
     writer = SummaryWriter(log_path)
     writer.add_text("args", str(args))
     logger.load(writer)
-    weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights")
+    weights_path = os.path.join(args.logdir, "mpr", "nvdn", "weights")
+    Path(weights_path).mkdir(parents=True, exist_ok=True)
 
     def save_best_fn(pol):
         weights_name = os.path.join(
@@ -298,7 +300,7 @@ def load_policy(path, args, env):
             net.parameters(), lr=args.lr
         )
 
-        policy = DQNPolicy(
+        policy = NVDNPolicy(
             net,
             optim,
             args.gamma,
