@@ -194,12 +194,12 @@ class GraphEnv(AECEnv):
         agent.allowed_actions[0] = False if sum([1 for index in one_hop_neighbor_indices if sum(
             self.world.agents[index].one_hop_neighbours_ids) == 1]) and not sum(agent.state.transmitted_to) else True
 
-        agent_observation_with_mask = {
-            "observation": data,
-            "action_mask": agent.allowed_actions
-        }
+        # agent_observation_with_mask = {
+        #     "observation": data,
+        #     "action_mask": agent.allowed_actions
+        # }
 
-        return agent_observation_with_mask
+        return data
 
     def reset(self, seed=None, return_info=False, options=None):
         # TODO check that workers seed is set from train.py
@@ -342,17 +342,16 @@ class GraphEnv(AECEnv):
         two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
         assert (set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
 
-        reward = agent.gained_two_hop_cover
+        reward = agent.two_hop_cover / len(two_hop_neighbor_indices)
         if sum(agent.state.transmitted_to):
-            reward -= sum([1 for index in one_hop_neighbor_indices if
-                           sum(self.world.agents[index].state.transmitted_to)])
-        if agent.steps_taken == 4:
-            if not sum(agent.state.transmitted_to):
-                reward -= sum([1 for index in one_hop_neighbor_indices if
-                               sum(self.world.agents[
-                                       index].state.received_from) == 0
-                               or self.world.agents[
-                                   index].state.message_origin == 0])
+            penalty_1 = sum([sum(self.world.agents[index].state.transmitted_to)/len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if
+                             sum(self.world.agents[index].state.transmitted_to)]) / len(one_hop_neighbor_indices)
+            reward = reward - penalty_1
+        if not sum(agent.state.transmitted_to):
+            penalty_2 = sum([1 for index in one_hop_neighbor_indices if
+                           sum(self.world.agents[index].state.received_from) == 0
+                           or self.world.agents[index].state.message_origin == 0]) / len(one_hop_neighbor_indices)
+            reward = reward - 3/4 * penalty_2
 
         return reward
 
