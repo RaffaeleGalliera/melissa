@@ -2,11 +2,14 @@ import argparse
 import datetime
 import os
 import pprint
+import time
+import warnings
 from typing import List, Tuple
 
 import gym
 import gymnasium
 import numpy as np
+import optuna
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
@@ -18,18 +21,13 @@ from tianshou.trainer import offpolicy_trainer
 
 from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
-from graph_env.env.utils.core import load_graph
 from graph_env.env.utils.logger import CustomLogger
-
 from graph_env.env.networks import GATNetwork
 from graph_env.env.policies import MultiAgentSharedPolicy
-
 from graph_env.env.collector import MultiAgentCollector
+from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
 
-import time
-import warnings
-
-os.environ["SDL_VIDEODRIVER"]="x11"
+os.environ["SDL_VIDEODRIVER"] = "x11"
 warnings.filterwarnings("ignore")
 
 
@@ -77,14 +75,32 @@ def get_parser() -> argparse.ArgumentParser:
         "--dynamic-graph",
         default=False,
         action="store_true",
-        help="Set WANDB logger"
+        help="Set dynamic graph"
     )
 
     parser.add_argument("--save-buffer-name", type=str, default=None)
     parser.add_argument("--model-name", type=str, default=datetime.datetime.now().strftime("%y%m%d-%H%M%S"))
 
-    return parser
+    parser.add_argument(
+        "--optimize", "--optimize-hyperparameters", action="store_true", default=False,
+        help="Run hyperparameters search"
+    )
 
+    parser.add_argument("--study-name", type=str, default=None)
+    parser.add_argument("--n-trials", type=int, default=100)
+    parser.add_argument("--n-jobs", type=int, default=1)
+    parser.add_argument("--n-startup-trials", type=int, default=5)
+    parser.add_argument("--n-warmup-steps", type=int, default=2)
+    parser.add_argument("--timeout", type=float, default=None)
+
+    parser.add_argument(
+        "--save-study",
+        default=False,
+        action="store_true",
+        help="Save study"
+    )
+
+    return parser
 
 def get_args() -> argparse.Namespace:
     parser = get_parser()
@@ -107,9 +123,9 @@ def get_env(number_of_agents=NUMBER_OF_AGENTS,
 
 
 def get_agents(
-    args: argparse.Namespace = get_args(),
-    policy: BasePolicy = None,
-    optim: torch.optim.Optimizer = None,
+        args: argparse.Namespace = get_args(),
+        policy: BasePolicy = None,
+        optim: torch.optim.Optimizer = None,
 ) -> Tuple[BasePolicy, torch.optim.Optimizer, List]:
     env = get_env()
     observation_space = env.observation_space['observation'] if isinstance(
@@ -151,12 +167,12 @@ def get_agents(
 
 
 def watch(
-    args: argparse.Namespace = get_args(),
-    masp_policy: BasePolicy = None,
+        args: argparse.Namespace = get_args(),
+        masp_policy: BasePolicy = None,
 ) -> None:
     weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights", f"{args.model_name}")
 
-    env = DummyVectorEnv([lambda: get_env(is_testing=True, render_mode='human',dynamic_graph=args.dynamic_graph)])
+    env = DummyVectorEnv([lambda: get_env(is_testing=True, render_mode='human', dynamic_graph=args.dynamic_graph)])
 
     if masp_policy is None:
         masp_policy = load_policy(weights_path, args, env)
@@ -176,9 +192,10 @@ def watch(
 
 
 def train_agent(
-    args: argparse.Namespace = get_args(),
-    masp_policy: BasePolicy = None,
-    optim: torch.optim.Optimizer = None,
+        args: argparse.Namespace = get_args(),
+        masp_policy: BasePolicy = None,
+        optim: torch.optim.Optimizer = None,
+        opt_trial: optuna.Trial = None
 ) -> Tuple[dict, BasePolicy]:
     train_envs = SubprocVectorEnv([lambda: get_env() for i in range(args.training_num)])
     test_envs = SubprocVectorEnv([lambda: get_env(is_testing=True)])
@@ -196,7 +213,7 @@ def train_agent(
         masp_policy,
         train_envs,
         VectorReplayBuffer(args.buffer_size,
-                           len(train_envs)*len(agents),
+                           len(train_envs) * len(agents),
                            ignore_obs_next=True),
         exploration_noise=True,
         number_of_agents=len(agents)
@@ -205,7 +222,7 @@ def train_agent(
         masp_policy,
         test_envs,
         VectorReplayBuffer(args.buffer_size,
-                           len(test_envs)*len(agents),
+                           len(test_envs) * len(agents),
                            ignore_obs_next=True),
         exploration_noise=True,
         number_of_agents=len(agents)
@@ -245,26 +262,49 @@ def train_agent(
     def reward_metric(rews):
         return rews[:, 0]
 
-    # trainer
-    result = offpolicy_trainer(
-        masp_policy,
-        train_collector,
-        test_collector,
-        max_epoch=args.epoch,
-        step_per_epoch=args.step_per_epoch,
-        step_per_collect=args.step_per_collect,
-        episode_per_test=args.test_num,
-        batch_size=args.batch_size,
-        train_fn=train_fn,
-        test_fn=test_fn,
-        # reward_metric
-        # stop_fn=stop_fn,
-        update_per_step=args.update_per_step,
-        test_in_train=False,
-        save_best_fn=save_best_fn,
-        logger=logger
-        # resume_from_log=args.resume
-    )
+    if not args.optimize:
+        # trainer
+        result = offpolicy_trainer(
+            masp_policy,
+            train_collector,
+            test_collector,
+            max_epoch=args.epoch,
+            step_per_epoch=args.step_per_epoch,
+            step_per_collect=args.step_per_collect,
+            episode_per_test=args.test_num,
+            batch_size=args.batch_size,
+            train_fn=train_fn,
+            test_fn=test_fn,
+            # reward_metric
+            # stop_fn=stop_fn,
+            update_per_step=args.update_per_step,
+            test_in_train=False,
+            save_best_fn=save_best_fn,
+            logger=logger
+            # resume_from_log=args.resume
+        )
+    else:
+        # optimizer
+        result = offpolicy_optimizer(
+            masp_policy,
+            train_collector,
+            test_collector,
+            max_epoch=args.epoch,
+            step_per_epoch=args.step_per_epoch,
+            step_per_collect=args.step_per_collect,
+            episode_per_test=args.test_num,
+            batch_size=args.batch_size,
+            train_fn=train_fn,
+            test_fn=test_fn,
+            # reward_metric
+            # stop_fn=stop_fn,
+            update_per_step=args.update_per_step,
+            test_in_train=False,
+            save_best_fn=save_best_fn,
+            logger=logger,
+            trial=opt_trial
+            # resume_from_log=args.resume
+        )
 
     print(f"Saving {args.model_name} last")
     torch.save(

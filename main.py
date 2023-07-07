@@ -1,15 +1,19 @@
-import os
 import pprint
 
-import pytest
-from train import get_args, train_agent, watch, load_policy
-import torch.multiprocessing as mp
+from train import get_args, train_agent, watch
+from graph_env.env.utils.optimizer import hyperparams_opt
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # @pytest.mark.skip(reason="runtime too long and unstable result")
 def test_mpr(args=get_args()):
     if args.watch:
         watch(args)
+        return
+
+    if args.optimize:
+        hyperparams_opt()
         return
 
     result, masp_policy = train_agent(args)
