@@ -155,7 +155,7 @@ def watch(
     args: argparse.Namespace = get_args(),
     masp_policy: BasePolicy = None,
 ) -> None:
-    weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights", f"{args.model_name}")
+    weights_path = os.path.join(args.logdir, "mpr", "nvdn", "weights", f"{args.model_name}")
 
     env = DummyVectorEnv([lambda: get_env(is_testing=True, render_mode='human',dynamic_graph=args.dynamic_graph)])
 
@@ -236,7 +236,7 @@ def train_agent(
         return mean_rewards > -4.84
 
     def train_fn(epoch, env_step):
-        eps = max(args.eps_train * (1 - 5e-6) ** env_step, args.eps_test)
+        eps = max(args.eps_train * (1 - 5e-6) ** env_step, args.eps_train_final)
         masp_policy.policy.set_eps(eps)
         if env_step % 1000 == 0:
             logger.write("train/env_step", env_step, {"train/eps": eps})
