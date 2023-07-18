@@ -84,7 +84,7 @@ def create_pruner(args) -> BasePruner:
     if args.pruner_method == "halving":
         pruner = SuccessiveHalvingPruner(min_resource=1, reduction_factor=4, min_early_stopping_rate=0)
     elif args.pruner_method == "median":
-        pruner = MedianPruner(n_startup_trials=args.n_trials//5, n_warmup_steps=args.n_epochs//3)
+        pruner = MedianPruner(n_startup_trials=args.n_trials//5, n_warmup_steps=args.epoch//3)
     elif args.pruner_method == "none":
         # Do not prune
         pruner = NopPruner()
