@@ -5,6 +5,7 @@ import pprint
 import time
 import warnings
 from typing import List, Tuple
+from math import pow, e, log
 
 import gym
 import gymnasium
@@ -33,9 +34,11 @@ warnings.filterwarnings("ignore")
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--learning-algorithm", type=str, default="dqn")
     parser.add_argument("--seed", type=int, default=9)
     parser.add_argument("--eps-test", type=float, default=0.001)
     parser.add_argument("--eps-train", type=float, default=1.)
+    parser.add_argument("--exploration-fraction", type=float, default=0.6)
     parser.add_argument("--eps-train-final", type=float, default=0.05)
     parser.add_argument("--buffer-size", type=int, default=100000)
     parser.add_argument("--lr", type=float, default=0.001)
@@ -87,10 +90,12 @@ def get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument("--study-name", type=str, default=None)
+    parser.add_argument("--sampler-method", type=str, default="tpe")
+    parser.add_argument("--pruner-method", type=str, default="median")
     parser.add_argument("--n-trials", type=int, default=100)
     parser.add_argument("--n-jobs", type=int, default=1)
-    parser.add_argument("--n-startup-trials", type=int, default=5)
-    parser.add_argument("--n-warmup-steps", type=int, default=2)
+    parser.add_argument("--n-startup-trials", type=int, default=2)
+    parser.add_argument("--n-warmup-steps", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=None)
 
     parser.add_argument(
@@ -228,12 +233,14 @@ def train_agent(
         number_of_agents=len(agents)
     )
     # train_collector.collect(n_step=args.batch_size * args.training_num)
-    # log
-    log_path = os.path.join(args.logdir, 'mpr', 'dqn')
-    logger = CustomLogger(project='dancing_bees', name=args.model_name)
-    writer = SummaryWriter(log_path)
-    writer.add_text("args", str(args))
-    logger.load(writer)
+
+    if not args.optimize:
+        # log
+        log_path = os.path.join(args.logdir, 'mpr', 'dqn')
+        logger = CustomLogger(project='dancing_bees', name=args.model_name)
+        writer = SummaryWriter(log_path)
+        writer.add_text("args", str(args))
+        logger.load(writer)
     weights_path = os.path.join(args.logdir, "mpr", "dqn", "weights")
 
     def save_best_fn(pol):
@@ -251,10 +258,12 @@ def train_agent(
         return mean_rewards > -4.84
 
     def train_fn(epoch, env_step):
-        eps = max(args.eps_train * (1 - 5e-6) ** env_step, args.eps_test)
+        decay_factor = (1 - pow(e, (log(args.eps_train_final)/(args.exploration_fraction * args.epoch * args.step_per_epoch))))
+        eps = max(args.eps_train * (1 - decay_factor) ** env_step, args.eps_train_final)
         masp_policy.policy.set_eps(eps)
-        if env_step % 1000 == 0:
-            logger.write("train/env_step", env_step, {"train/eps": eps})
+        if not args.optimize:
+            if env_step % 1000 == 0:
+                logger.write("train/env_step", env_step, {"train/eps": eps})
 
     def test_fn(epoch, env_step):
         masp_policy.policy.set_eps(args.eps_test)
@@ -301,7 +310,6 @@ def train_agent(
             update_per_step=args.update_per_step,
             test_in_train=False,
             save_best_fn=save_best_fn,
-            logger=logger,
             trial=opt_trial
             # resume_from_log=args.resume
         )

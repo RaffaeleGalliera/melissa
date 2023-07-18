@@ -1,6 +1,7 @@
 from typing import Any, Dict, Tuple
-import optuna
 
+import math
+import optuna
 from tianshou.trainer.base import BaseTrainer
 from tianshou.trainer.utils import test_episode
 
@@ -59,11 +60,19 @@ class BaseOptimizer(BaseTrainer):
         # One evaluation is added to the total
         self.eval_idx += 1
 
-        # Report of the trial is printed
-        self.trial.report(rew, self.eval_idx)
+        # Average reward and coverage are extracted
+        avg_rew = test_result['rew']
+        avg_coverage = test_result['coverage']
+
+        # Intermediate report of the trial is printed: metric is the same as the trial
+        self.trial.report(sigmoid(avg_rew)*avg_coverage, self.eval_idx)
 
         # Prune trial if needed
         if self.trial.should_prune():
             raise optuna.exceptions.TrialPruned()
 
         return test_stat, stop_fn_flag
+
+
+def sigmoid(x):
+    return 1 / (1 + math.exp(-x))

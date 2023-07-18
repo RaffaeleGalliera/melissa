@@ -16,7 +16,7 @@ work as wrapper for the BaseOptimizer class.
 
 
 class OffpolicyOptimizer(BaseOptimizer):
-    __doc__ = BaseTrainer.gen_doc("offpolicy") + "\n".join(__doc__.split("\n")[1:])
+    #__doc__ = BaseTrainer.gen_doc("offpolicy") + "\n".join(__doc__.split("\n")[1:])
 
     def __init__(
             self,
@@ -36,7 +36,6 @@ class OffpolicyOptimizer(BaseOptimizer):
             save_checkpoint_fn: Optional[Callable[[int, int, int], str]] = None,
             resume_from_log: bool = False,
             reward_metric: Optional[Callable[[np.ndarray], np.ndarray]] = None,
-            logger: BaseLogger = LazyLogger(),
             verbose: bool = True,
             show_progress: bool = True,
             test_in_train: bool = True,
@@ -61,7 +60,6 @@ class OffpolicyOptimizer(BaseOptimizer):
             save_checkpoint_fn=save_checkpoint_fn,
             resume_from_log=resume_from_log,
             reward_metric=reward_metric,
-            logger=logger,
             verbose=verbose,
             show_progress=show_progress,
             test_in_train=test_in_train,
