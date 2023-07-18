@@ -245,7 +245,7 @@ def train_agent(
         masp_policy.policy.set_eps(args.eps_test)
 
     def reward_metric(rews):
-        return rews[:, 0]
+        return rews.mean()
 
     # trainer
     result = offpolicy_trainer(
