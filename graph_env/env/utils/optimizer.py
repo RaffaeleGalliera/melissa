@@ -29,6 +29,9 @@ def dqn_params_set(trial, args):
     args.exploration_fraction = trial.suggest_uniform("exploration_fraction", 0.5, 0.8)  # def 0.6
     args.update_per_step = trial.suggest_categorical("update_per_step", [0.1, 0.5, 1])  # def 0.1
     args.target_update_freq = trial.suggest_categorical("target_update_freq", [100, 500, 1000, 5000])  # def 500
+    args.aggregator_function = trial.suggest_categorical("aggregator_function",
+                                                         ["global_max_pool", "global_add_pool", "global_mean_pool"])
+    # def "global_max_pool"
 
 
 def objective(trial):
@@ -45,12 +48,11 @@ def objective(trial):
     # Agents are tested
     test_result = test_agent(args, masp_policy)
 
-    # Average reward and coverage are saved
-    avg_rew = test_result['rew']
-    avg_coverage = test_result['coverage']
+    # Average metric is extracted
+    avg_spread_factor = test_result['spread_factor_mean']
 
     # This metric force the reward to be in the [0,1] range and multiplies it by the coverage
-    return sigmoid(avg_rew) * avg_coverage
+    return avg_spread_factor
 
 
 def test_agent(args, masp_policy):
@@ -71,7 +73,7 @@ def create_sampler(args) -> BaseSampler:
     if args.sampler_method == "random":
         sampler = RandomSampler()
     elif args.sampler_method == "tpe":
-        sampler = TPESampler(n_startup_trials=args.n_trials//5, multivariate=True)
+        sampler = TPESampler(n_startup_trials=args.n_trials // 5, multivariate=True)
     elif args.sampler_method == "skopt":
         from optuna.integration.skopt import SkoptSampler
         sampler = SkoptSampler(skopt_kwargs={"base_estimator": "GP", "acq_func": "gp_hedge"})
@@ -84,7 +86,7 @@ def create_pruner(args) -> BasePruner:
     if args.pruner_method == "halving":
         pruner = SuccessiveHalvingPruner(min_resource=1, reduction_factor=4, min_early_stopping_rate=0)
     elif args.pruner_method == "median":
-        pruner = MedianPruner(n_startup_trials=args.n_trials//5, n_warmup_steps=args.epoch//3)
+        pruner = MedianPruner(n_startup_trials=args.n_trials // 5, n_warmup_steps=args.epoch // 3)
     elif args.pruner_method == "none":
         # Do not prune
         pruner = NopPruner()
@@ -174,6 +176,3 @@ def hyperparams_opt():
     fig1.show()
     fig2.show()
 
-
-def sigmoid(x):
-    return 1 / (1 + math.exp(-x))

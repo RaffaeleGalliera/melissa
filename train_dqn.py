@@ -64,6 +64,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--render", type=float, default=0.)
     parser.add_argument('--dueling-q-hidden-sizes', type=int, nargs='*', default=[128, 128])
     parser.add_argument('--dueling-v-hidden-sizes', type=int, nargs='*', default=[128, 128])
+    parser.add_argument("--aggregator-function", type=str, default="global_max_pool")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume-path", type=str, default=None)
     parser.add_argument("--resume-id", type=str, default=None)
@@ -157,7 +158,8 @@ def get_agents(
             args.action_shape,
             args.num_heads,
             device=args.device,
-            dueling_param=(q_param, v_param)
+            dueling_param=(q_param, v_param),
+            aggregator_function=args.aggregator_function
         )
 
         optim = torch.optim.Adam(
