@@ -60,19 +60,14 @@ class BaseOptimizer(BaseTrainer):
         # One evaluation is added to the total
         self.eval_idx += 1
 
-        # Average reward and coverage are extracted
-        avg_rew = test_result['rew']
-        avg_coverage = test_result['coverage']
+        # Average metric is extracted
+        avg_spread_factor = test_result['spread_factor_mean']
 
         # Intermediate report of the trial is printed: metric is the same as the trial
-        self.trial.report(sigmoid(avg_rew)*avg_coverage, self.eval_idx)
+        self.trial.report(avg_spread_factor, self.eval_idx)
 
         # Prune trial if needed
         if self.trial.should_prune():
             raise optuna.exceptions.TrialPruned()
 
         return test_stat, stop_fn_flag
-
-
-def sigmoid(x):
-    return 1 / (1 + math.exp(-x))
