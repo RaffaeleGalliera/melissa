@@ -257,26 +257,33 @@ class World:
 
     def update_agent_features(self, agent):
         # Update graph
-        self.graph.nodes[agent.id]['features'] = [
+        self.graph.nodes[agent.id]['features_critic'] = [
             sum(agent.one_hop_neighbours_ids),
             agent.messages_transmitted,
             agent.steps_taken
         ]
-        self.graph.nodes[agent.id]['features'] = np.concatenate(
-            (self.graph.nodes[agent.id]['features'],
+
+        self.graph.nodes[agent.id]['features_actor'] = [
+            sum(agent.one_hop_neighbours_ids),
+            agent.messages_transmitted
+        ]
+
+        self.graph.nodes[agent.id]['features_critic'] = np.concatenate(
+            (self.graph.nodes[agent.id]['features_critic'],
              agent.actions_history)
         )
 
+        self.graph.nodes[agent.id]['features_actor'] = np.concatenate(
+            (self.graph.nodes[agent.id]['features_actor'],
+             agent.actions_history)
+        )
+
+    def update_local_graph(self, agent):
         agent.update_local_view(
             local_view=nx.ego_graph(self.graph, agent.id,
                                     undirected=True))
 
         agent.update_two_hop_cover_from_one_hopper(self.agents)
-
-    def update_local_graph(self, agent):
-        agent.local_view = nx.ego_graph(self.graph,
-                                        agent.id,
-                                        undirected=True)
 
     def move_graph(self):
         # Graph and agent state is saved for visualization
@@ -363,7 +370,8 @@ class World:
         for agent in self.agents:
             agent.state.reset(self.num_agents)
             self.update_one_hop_neighbors(agent)
-            self.graph.nodes[agent.id]['features'] = np.zeros((7,))
+            self.graph.nodes[agent.id]['features_actor'] = np.zeros((6,))
+            self.graph.nodes[agent.id]['features_critic'] = np.zeros((7,))
             self.graph.nodes[agent.id]['label'] = agent.id
 
         actions_dim = np.ones(2)
@@ -382,6 +390,9 @@ class World:
             agent.truncated = False
 
             self.update_agent_features(agent)
+
+        for agent in self.agents:
+            self.update_local_graph(agent)
 
         random_agent.state.message_origin = 1
         random_agent.action = 1

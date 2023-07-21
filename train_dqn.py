@@ -21,7 +21,7 @@ from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
 from graph_env.env.utils.logger import CustomLogger
 
-from graph_env.env.networks import GATNetwork
+from graph_env.env.utils.networks.ddqn_gat import GATNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
 
 from graph_env.env.utils.collectors.collaborative_collector import MultiAgentCollaborativeCollector
@@ -164,7 +164,7 @@ def watch(
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
 
-    collector = MultiAgentCollaborativeCollector(masp_policy, env, exploration_noise=True, number_of_agents=NUMBER_OF_AGENTS)
+    collector = MultiAgentCollaborativeCollector(masp_policy, env, exploration_noise=False, number_of_agents=NUMBER_OF_AGENTS)
     # TODO Send here fps to collector
     result = collector.collect(n_episode=args.test_num)
 
@@ -207,7 +207,7 @@ def train_agent(
         VectorReplayBuffer(args.buffer_size,
                            len(test_envs)*len(agents),
                            ignore_obs_next=True),
-        exploration_noise=True,
+        exploration_noise=False,
         number_of_agents=len(agents)
     )
     # train_collector.collect(n_step=args.batch_size * args.training_num)

@@ -170,13 +170,13 @@ class GraphEnv(AECEnv):
         # Every entry needs to be wrapped in a Batch object, otherwise
         # we will have shape errors in the data replay buffer
         edge_index = np.asarray(agent_observation.edge_index, dtype=np.int32)
-        features = np.asarray(agent_observation.features, dtype=np.float32)
+        features = np.asarray(agent_observation.features_actor, dtype=np.float32)
 
         # Store Network for Total/Neighbourhood-wise VDN
         # network = networkx.ego_graph(self.world.graph, agent.id, undirected=True, radius=2)
         network = from_networkx(self.world.graph)
         network_edge_index = np.asarray(network.edge_index, np.int32)
-        network_features = np.asarray(network.features, dtype=np.float32)
+        network_features = np.asarray(network.features_critic, dtype=np.float32)
 
         labels = np.asarray(agent_observation.label, dtype=object)
         data = Batch.stack([Batch(observation=edge_index),
@@ -193,11 +193,6 @@ class GraphEnv(AECEnv):
         # there is no need to prohibit non transmission
         agent.allowed_actions[0] = False if sum([1 for index in one_hop_neighbor_indices if sum(
             self.world.agents[index].one_hop_neighbours_ids) == 1]) and not sum(agent.state.transmitted_to) else True
-
-        # agent_observation_with_mask = {
-        #     "observation": data,
-        #     "action_mask": agent.allowed_actions
-        # }
 
         return data
 
@@ -344,14 +339,14 @@ class GraphEnv(AECEnv):
 
         reward = agent.two_hop_cover / len(two_hop_neighbor_indices)
         if sum(agent.state.transmitted_to):
-            penalty_1 = sum([sum(self.world.agents[index].state.transmitted_to)/len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if
-                             sum(self.world.agents[index].state.transmitted_to)]) / len(one_hop_neighbor_indices)
+            penalty_1 = sum([self.world.agents[index].messages_transmitted for index in one_hop_neighbor_indices]) / len(one_hop_neighbor_indices)
             reward = reward - penalty_1
         if not sum(agent.state.transmitted_to):
             penalty_2 = sum([1 for index in one_hop_neighbor_indices if
-                           sum(self.world.agents[index].state.received_from) == 0
-                           or self.world.agents[index].state.message_origin == 0]) / len(one_hop_neighbor_indices)
-            reward = reward - 3/4 * penalty_2
+                             sum(self.world.agents[index].state.received_from) == 0
+                             and self.world.agents[index].state.message_origin == 0])
+            penalty_2 = 1 if penalty_2 > 0 else 0
+            reward = reward - penalty_2
 
         return reward
 
