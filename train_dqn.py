@@ -18,6 +18,7 @@ from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
 from tianshou.policy import BasePolicy, DQNPolicy
 from tianshou.trainer import offpolicy_trainer
+from torch_geometric.nn import global_max_pool, global_mean_pool, global_add_pool
 
 from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
@@ -114,6 +115,7 @@ def get_parser() -> argparse.ArgumentParser:
 
     return parser
 
+
 def get_args() -> argparse.Namespace:
     parser = get_parser()
     return parser.parse_known_args()[0]
@@ -152,6 +154,14 @@ def get_agents(
         q_param = {"hidden_sizes": args.dueling_q_hidden_sizes}
         v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
 
+        aggregator = None
+        if args.aggregator_function == "global_max_pool":
+            aggregator = global_max_pool
+        elif args.aggregator_function == "global_mean_pool":
+            aggregator = global_mean_pool
+        elif args.aggregator_function == "global_add_pool":
+            aggregator = global_add_pool
+
         net = GATNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
@@ -159,7 +169,7 @@ def get_agents(
             args.num_heads,
             device=args.device,
             dueling_param=(q_param, v_param),
-            aggregator_function=args.aggregator_function
+            aggregator_function=aggregator
         )
 
         optim = torch.optim.Adam(
@@ -267,7 +277,8 @@ def train_agent(
         return mean_rewards > -4.84
 
     def train_fn(epoch, env_step):
-        decay_factor = (1 - pow(e, (log(args.eps_train_final)/(args.exploration_fraction * args.epoch * args.step_per_epoch))))
+        decay_factor = (1 - pow(e, (
+                    log(args.eps_train_final) / (args.exploration_fraction * args.epoch * args.step_per_epoch))))
         eps = max(args.eps_train * (1 - decay_factor) ** env_step, args.eps_train_final)
         masp_policy.policy.set_eps(eps)
         if not args.optimize:
