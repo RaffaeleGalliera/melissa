@@ -28,6 +28,7 @@ def dqn_params_set(trial, args):
     args.eps_train_final = trial.suggest_uniform("eps_train_final", 0, 0.2)  # def 0.05
     args.exploration_fraction = trial.suggest_uniform("exploration_fraction", 0.5, 0.8)  # def 0.6
     args.update_per_step = trial.suggest_categorical("update_per_step", [0.1, 0.5, 1])  # def 0.1
+    args.step_per_collect = trial.suggest_categorical("step_per_collect", [100])  # def 10
     args.target_update_freq = trial.suggest_categorical("target_update_freq", [100, 500, 1000, 5000])  # def 500
     args.aggregator_function = trial.suggest_categorical("aggregator_function",
                                                          ["global_max_pool", "global_add_pool", "global_mean_pool"])

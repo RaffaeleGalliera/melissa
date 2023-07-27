@@ -30,7 +30,7 @@ class GATNetwork(nn.Module):
                  features_only=False,
                  dueling_param: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None,
                  device='cpu',
-                 aggregator_function="global_max_pool"):
+                 aggregator_function=global_max_pool):
         super(GATNetwork, self).__init__()
         self.aggregator_function = aggregator_function
         self.device = device
@@ -63,17 +63,7 @@ class GATNetwork(nn.Module):
         x, edge_index = obs.x, obs.edge_index
         x = self.conv1(x, edge_index)
         x = F.relu(x)
-        x = self.aggregate(x, batch=obs.batch)
+        x = self.aggregator_function(x, batch=obs.batch)
         q, v = self.Q(x), self.V(x)
         x = q - q.mean(dim=1, keepdim=True) + v
         return x, state
-
-    def aggregate(self, x, batch):
-        new_x = x
-        if self.aggregator_function == "global_max_pool":
-            new_x = global_max_pool(x, batch=batch)
-        elif self.aggregator_function == "global_mean_pool":
-            new_x = global_mean_pool(x, batch=batch)
-        elif self.aggregator_function == "global_add_pool":
-            new_x = global_add_pool(x, batch=batch)
-        return new_x
