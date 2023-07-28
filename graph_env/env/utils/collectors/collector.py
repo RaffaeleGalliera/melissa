@@ -336,9 +336,12 @@ class MultiAgentCollector(Collector):
             )
             msg_mean, msg_std = msgs.mean(), msgs.std()
             coverage_mean, coverage_std = coverages.mean(), coverages.std()
+            # Spread factor: how "fast" a message is spread through the network
+            spread_factor = (coverages/np.sqrt(msgs))
+            spread_factor_mean = spread_factor.mean()
         else:
-            msgs, coverages = np.array([]), np.array([], int)
-            msg_mean = msg_std = coverage_mean = coverage_std = 0
+            msgs, coverages, spread_factor = np.array([]), np.array([], int), np.array([])
+            msg_mean = msg_std = coverage_mean = coverage_std = spread_factor_mean = 0
 
         return {
             "n/ep": episode_count,
@@ -355,6 +358,8 @@ class MultiAgentCollector(Collector):
             "len_std": len_std,
             "coverage": coverage_mean,
             "coverage_std": coverage_std,
+            "spread_factor": spread_factor,
+            "spread_factor_mean": spread_factor_mean,
             "msg": msg_mean,
             "msg_std": msg_std
         }
