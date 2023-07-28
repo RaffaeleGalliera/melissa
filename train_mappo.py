@@ -26,7 +26,7 @@ from graph_env.env.utils.logger import CustomLogger
 from graph_env.env.utils.networks.actor_critic_gat import GATNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
 
-from graph_env.env.utils.collectors.collaborative_collector import MultiAgentCollaborativeCollector
+from graph_env.env.utils.collectors.collector import MultiAgentCollector
 
 import time
 import warnings
@@ -214,7 +214,7 @@ def watch(
 
     masp_policy.policy.eval()
 
-    collector = MultiAgentCollaborativeCollector(masp_policy,
+    collector = MultiAgentCollector(masp_policy,
                                     env,
                                     exploration_noise=False,
                                     number_of_agents=NUMBER_OF_AGENTS)
@@ -245,7 +245,7 @@ def train_agent(
     masp_policy, optim, agents = get_agents(args, policy=masp_policy, optim=optim)
 
     # collector
-    train_collector = MultiAgentCollaborativeCollector(
+    train_collector = MultiAgentCollector(
         masp_policy,
         train_envs,
         VectorReplayBuffer(args.buffer_size,
@@ -254,7 +254,7 @@ def train_agent(
         exploration_noise=True,
         number_of_agents=len(agents)
     )
-    test_collector = MultiAgentCollaborativeCollector(
+    test_collector = MultiAgentCollector(
         masp_policy,
         test_envs,
         VectorReplayBuffer(args.buffer_size,

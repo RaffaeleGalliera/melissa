@@ -27,7 +27,7 @@ from graph_env.env.utils.logger import CustomLogger
 from graph_env.env.utils.networks.ddqn_gat import GATNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
 
-from graph_env.env.utils.collectors.collaborative_collector import MultiAgentCollaborativeCollector
+from graph_env.env.utils.collectors.collector import MultiAgentCollector
 from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
 
 import time
@@ -200,7 +200,7 @@ def watch(
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
 
-    collector = MultiAgentCollaborativeCollector(masp_policy, env, exploration_noise=False, number_of_agents=NUMBER_OF_AGENTS)
+    collector = MultiAgentCollector(masp_policy, env, exploration_noise=False, number_of_agents=NUMBER_OF_AGENTS)
     # TODO Send here fps to collector
     result = collector.collect(n_episode=args.test_num)
 
@@ -229,7 +229,7 @@ def train_agent(
     masp_policy, optim, agents = get_agents(args, policy=masp_policy, optim=optim)
 
     # collector
-    train_collector = MultiAgentCollaborativeCollector(
+    train_collector = MultiAgentCollector(
         masp_policy,
         train_envs,
         VectorReplayBuffer(args.buffer_size,
@@ -238,7 +238,7 @@ def train_agent(
         exploration_noise=True,
         number_of_agents=len(agents)
     )
-    test_collector = MultiAgentCollaborativeCollector(
+    test_collector = MultiAgentCollector(
         masp_policy,
         test_envs,
         VectorReplayBuffer(args.buffer_size,
