@@ -8,11 +8,9 @@ from optuna.pruners import MedianPruner, SuccessiveHalvingPruner, NopPruner, Bas
 from optuna.samplers import TPESampler, RandomSampler, BaseSampler
 from optuna.visualization import plot_optimization_history, plot_param_importances
 from tianshou.env import DummyVectorEnv
-from graph_env.env.collector import MultiAgentCollector
-from train import get_args, train_agent, get_env
+from graph_env.env.utils.collectors.collector import MultiAgentCollector
+from train_dqn import get_args, train_agent, get_env
 from .constants import NUMBER_OF_AGENTS
-from plotly.graph_objects import Figure
-from concurrent.futures import ThreadPoolExecutor
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -31,8 +29,7 @@ def dqn_params_set(trial, args):
     args.step_per_collect = trial.suggest_categorical("step_per_collect", [5, 10, 50, 100])  # def 10
     args.target_update_freq = trial.suggest_categorical("target_update_freq", [100, 500, 1000, 5000])  # def 500
     args.aggregator_function = trial.suggest_categorical("aggregator_function",
-                                                         ["global_max_pool", "global_add_pool", "global_mean_pool"])
-    # def "global_max_pool"
+                                                         ["global_max_pool", "global_add_pool", "global_mean_pool"]) # def "global_max_pool"
 
 
 def objective(trial):

@@ -22,17 +22,13 @@ from torch_geometric.nn import global_max_pool, global_mean_pool, global_add_poo
 
 from graph_env import graph_env_v0
 from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
-from graph_env.env.utils.core import load_graph
 from graph_env.env.utils.logger import CustomLogger
 from graph_env.env.networks import GATNetwork
-from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
-
-from graph_env.env.utils.collectors.collector import MultiAgentCollector
 
 import time
 import warnings
-from graph_env.env.policies import MultiAgentSharedPolicy
-from graph_env.env.collector import MultiAgentCollector
+from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
+from graph_env.env.utils.collectors.collector import MultiAgentCollector
 from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
 
 os.environ["SDL_VIDEODRIVER"] = "x11"

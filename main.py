@@ -1,7 +1,7 @@
 import os
 import pprint
 
-from train import get_args, train_agent, watch
+from train_dqn import get_args, train_agent, watch
 from graph_env.env.utils.optimizer import hyperparams_opt
 
 
