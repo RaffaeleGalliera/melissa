@@ -29,8 +29,10 @@ class GATNetwork(nn.Module):
                  num_heads,
                  features_only=False,
                  dueling_param: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None,
-                 device='cpu'):
+                 device='cpu',
+                 aggregator_function=global_max_pool):
         super(GATNetwork, self).__init__()
+        self.aggregator_function = aggregator_function
         self.device = device
         self.output_dim = hidden_dim * num_heads
         self.hidden_dim = hidden_dim
@@ -58,11 +60,10 @@ class GATNetwork(nn.Module):
 
     def forward(self, obs, state=None, info={}):
         obs = to_pytorch_geometric_batch(obs, self.device)
-
         x, edge_index = obs.x, obs.edge_index
         x = self.conv1(x, edge_index)
         x = F.relu(x)
-        x = global_max_pool(x, batch=obs.batch)
+        x = self.aggregator_function(x, batch=obs.batch)
         q, v = self.Q(x), self.V(x)
         x = q - q.mean(dim=1, keepdim=True) + v
         return x, state
