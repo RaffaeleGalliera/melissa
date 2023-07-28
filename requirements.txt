@@ -13,3 +13,4 @@ optuna
 optuna-dashboard
 wandb
 plotly
+pandas
