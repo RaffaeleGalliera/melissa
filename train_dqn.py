@@ -114,8 +114,9 @@ def get_parser() -> argparse.ArgumentParser:
 
 
 def get_args() -> argparse.Namespace:
-    parser = get_parser()
-    return parser.parse_known_args()[0]
+    parser = get_parser().parse_known_args()[0]
+    parser.learning_algorithm = "dqn"
+    return parser
 
 
 def get_env(number_of_agents=NUMBER_OF_AGENTS,
