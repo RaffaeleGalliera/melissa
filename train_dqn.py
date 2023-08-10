@@ -83,7 +83,7 @@ def get_parser() -> argparse.ArgumentParser:
         "--dynamic-graph",
         default=False,
         action="store_true",
-        help="Set dynamic graph"
+        help="Enable dynamic graphs"
     )
 
     parser.add_argument("--save-buffer-name", type=str, default=None)

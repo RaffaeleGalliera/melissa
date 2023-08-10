@@ -176,9 +176,9 @@ class GraphEnv(AECEnv):
         # network = networkx.ego_graph(self.world.graph, agent.id, undirected=True, radius=2)
         network = from_networkx(self.world.graph)
         network_edge_index = np.asarray(network.edge_index, np.int32)
-        network_features = np.asarray(network.features_critic, dtype=np.float32)
+        network_features = np.asarray(network.features_actor, dtype=np.float32)
 
-        labels = np.asarray(agent_observation.label, dtype=object)
+        labels = np.asarray(network.label, dtype=object)
         data = Batch.stack([Batch(observation=edge_index),
                             Batch(observation=labels),
                             Batch(observation=features),
@@ -277,10 +277,11 @@ class GraphEnv(AECEnv):
             )
 
             if n_received == NUMBER_OF_AGENTS and self.render_mode == 'human':
+                cds = [agent.id for agent in self.world.agents if agent.messages_transmitted > 0]
                 print(
                     f"Every agent has received the message, terminating in {self.num_moves}, "
                     f"messages transmitted: {self.world.messages_transmitted}")
-
+                print(cds)
             if self.render_mode == 'human':
                 self.render()
 
@@ -345,7 +346,7 @@ class GraphEnv(AECEnv):
             uncovered_n_lens = [len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if
                                 sum(self.world.agents[index].state.received_from) == 0
                                 and self.world.agents[index].state.message_origin == 0]
-            penalty_2 = sum(uncovered_n_lens) if len(uncovered_n_lens) else 0
+            penalty_2 = max(uncovered_n_lens) if len(uncovered_n_lens) else 0
             penalty_2 = penalty_2
             reward = reward - penalty_2
 

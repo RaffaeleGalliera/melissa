@@ -1,4 +1,5 @@
 import copy
+from itertools import cycle
 import glob
 import pickle
 import numpy as np
@@ -69,7 +70,6 @@ def mpr_heuristic(one_hop_neighbours_ids,
                 zip(local_view.nodes[key_to_add]['one_hop'], reachable_uncovered)])
 
     return mpr
-
 
 class State:
     def __init__(self):
@@ -188,7 +188,7 @@ class World:
         self.pre_move_graph = None
         self.pre_move_agents = None
         if self.is_testing:
-            self.graphs = glob.glob(constants.TESTING_PATH)
+            self.graphs = cycle(glob.glob(constants.TESTING_PATH))
         else:
             self.graphs = glob.glob(constants.TRAINING_PATH)
         self.reset()
@@ -352,11 +352,12 @@ class World:
         if self.random_graph:
             self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
         elif not self.is_graph_fixed:
-            self.graph = load_graph(
-                self.np_random.choice(self.graphs,
-                                      replace=False if self.is_testing else True
-                                      )
-            )
+            if self.is_testing:
+                self.graph = load_graph(next(self.graphs))
+            else:
+                self.graph = load_graph(
+                    self.np_random.choice(self.graphs, replace=True)
+                )
 
         self.agents = [Agent(i,
                              nx.ego_graph(self.graph, i, undirected=True),

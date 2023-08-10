@@ -39,6 +39,7 @@ class MultiAgentCollector(Collector):
         self.to_be_reset = np.full((len(env),), False)
         self.environment_step = np.full((len(env),), False)
         self.rews = np.zeros((len(env), number_of_agents))
+        self.master_episode_rews = np.zeros((len(env),))
         self.envs_to_step_exps = Batch()
         self.exps = None
         super().__init__(policy,
@@ -112,6 +113,7 @@ class MultiAgentCollector(Collector):
         episode_count = 0
         master_episode_count = 0
         episode_rews = []
+        master_episode_rew = []
         episode_lens = []
         episode_start_indices = []
         coverage = []
@@ -281,6 +283,8 @@ class MultiAgentCollector(Collector):
                     episode_count += len(done_eps)
                     episode_lens.append(ep_len[done_eps])
                     episode_rews.append(ep_rew[done_eps, self.exps.obs.agent_id[done_eps].astype(int)])
+                    for env, rew in zip(self.exps.info.env_id[done_eps], ep_rew[done_eps, self.exps.obs.agent_id[done_eps].astype(int)]):
+                        self.master_episode_rews[env] += rew
                     episode_start_indices.append(ep_idx[done_eps])
                 # assert not np.any(ep_len > 5)
                 self.exps = None
@@ -312,6 +316,8 @@ class MultiAgentCollector(Collector):
                 env_ind_local = ready_to_reset
                 env_ind_global = ready_env_ids[env_ind_local]
                 master_episode_count += len(env_ind_local)
+                master_episode_rew.append(self.master_episode_rews[env_ind_global])
+                self.master_episode_rews[env_ind_global] = 0
                 coverage.append(self.data.info.coverage[env_ind_local])
                 messages_transmitted.append(self.data.info.messages_transmitted[env_ind_local])
                 # now we copy obs_next to obs, but since there might be
@@ -373,17 +379,18 @@ class MultiAgentCollector(Collector):
             rew_mean = rew_std = len_mean = len_std = 0
 
         if master_episode_count > 0:
-            msgs, coverages = list(
+            msgs, coverages, master_episodes_rew = list(
                 map(
                     np.concatenate,
-                    [messages_transmitted, coverage]
+                    [messages_transmitted, coverage, master_episode_rew]
                 )
             )
             msg_mean, msg_std = msgs.mean(), msgs.std()
             coverage_mean, coverage_std = coverages.mean(), coverages.std()
+            master_episodes_rew_mean, master_episodes_rew_std = master_episodes_rew.mean(), master_episodes_rew.std()
         else:
-            msgs, coverages = np.array([]), np.array([], int)
-            msg_mean = msg_std = coverage_mean = coverage_std = 0
+            msgs, coverages, master_episodes_rew = np.array([]), np.array([], int), np.array([], int)
+            msg_mean = msg_std = coverage_mean = coverage_std = master_episodes_rew_mean = master_episodes_rew_std =  0
 
         return {
             "n/ep": episode_count,
@@ -401,5 +408,7 @@ class MultiAgentCollector(Collector):
             "coverage": coverage_mean,
             "coverage_std": coverage_std,
             "msg": msg_mean,
-            "msg_std": msg_std
+            "msg_std": msg_std,
+            "master_episode_rew": master_episodes_rew_mean,
+            "master_episode_rew_std": master_episodes_rew_std
         }

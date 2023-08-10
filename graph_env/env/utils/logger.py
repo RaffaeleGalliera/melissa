@@ -18,7 +18,11 @@ class CustomLogger(WandbLogger):
                 "train/coverage": collect_result["coverage"],
                 "train/coverage_std": collect_result["coverage_std"],
                 "train/messages": collect_result["msg"],
-                "train/messages_std": collect_result["msg_std"]
+                "train/messages_std": collect_result["msg_std"],
+                "train/master_episode_rew": collect_result[
+                    "master_episode_rew"],
+                "train/master_episode_rew_std": collect_result[
+                    "master_episode_rew_std"]
             }
             self.write("train/env_step", step, log_data)
         elif collect_result["n/ep"] > 0:
@@ -47,7 +51,11 @@ class CustomLogger(WandbLogger):
                 "test/coverage": collect_result["coverage"],
                 "test/coverage_std": collect_result["coverage_std"],
                 "test/messages": collect_result["msg"],
-                "test/messages_std": collect_result["msg_std"]
+                "test/messages_std": collect_result["msg_std"],
+                "train/master_episode_rew": collect_result[
+                    "master_episode_rew"],
+                "train/master_episode_rew_std": collect_result[
+                    "master_episode_rew_std"]
             }
             self.write("train/env_step", step, log_data)
         elif step - self.last_log_test_step >= self.test_interval:

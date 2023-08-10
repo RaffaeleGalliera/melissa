@@ -92,11 +92,33 @@ def get_parser() -> argparse.ArgumentParser:
         "--dynamic-graph",
         default=False,
         action="store_true",
-        help="Set WANDB logger"
+        help="Enable dynamic graphs"
     )
 
     parser.add_argument("--save-buffer-name", type=str, default=None)
     parser.add_argument("--model-name", type=str, default=datetime.datetime.now().strftime("%y%m%d-%H%M%S"))
+
+    parser.add_argument(
+        "--optimize", "--optimize-hyperparameters", action="store_true",
+        default=False,
+        help="Run hyperparameters search"
+    )
+
+    parser.add_argument("--study-name", type=str, default=None)
+    parser.add_argument("--sampler-method", type=str, default="tpe")
+    parser.add_argument("--pruner-method", type=str, default="median")
+    parser.add_argument("--n-trials", type=int, default=100)
+    parser.add_argument("--n-jobs", type=int, default=1)
+    parser.add_argument("--n-startup-trials", type=int, default=2)
+    parser.add_argument("--n-warmup-steps", type=int, default=3)
+    parser.add_argument("--timeout", type=float, default=None)
+
+    parser.add_argument(
+        "--save-study",
+        default=False,
+        action="store_true",
+        help="Save study"
+    )
 
     return parser
 

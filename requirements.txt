@@ -9,7 +9,7 @@ Gymnasium~=0.26.3
 PettingZoo==1.22.2
 networkx~=2.8.8
 torch-geometric~=2.2.0
-optuna
+optuna~=3.2.0
 optuna-dashboard
 wandb
 plotly
