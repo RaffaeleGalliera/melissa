@@ -22,7 +22,7 @@ def to_pytorch_geometric_batch(obs, device):
     return PyGeomBatch.from_data_list(observations)
 
 
-class GATNetwork(nn.Module):
+class LDGNNetwork(nn.Module):
     def __init__(self,
                  input_dim,
                  hidden_dim,
@@ -32,7 +32,7 @@ class GATNetwork(nn.Module):
                  dueling_param: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None,
                  device='cpu',
                  aggregator_function=global_max_pool):
-        super(GATNetwork, self).__init__()
+        super(LDGNNetwork, self).__init__()
         self.aggregator_function = aggregator_function
         self.device = device
         self.output_dim = hidden_dim * num_heads

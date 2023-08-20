@@ -21,10 +21,10 @@ from tianshou.trainer import offpolicy_trainer
 from torch_geometric.nn import global_max_pool, global_mean_pool, global_add_pool
 
 from graph_env import graph_env_v0
-from graph_env.env.utils.constants import NUMBER_OF_AGENTS, RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
+from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
 from graph_env.env.utils.logger import CustomLogger
 
-from graph_env.env.utils.networks.dgn import GATNetwork
+from graph_env.env.utils.networks.dgn_r import DGNRNetwork
 from graph_env.env.utils.policies.dgn import DGNPolicy
 from graph_env.env.utils.policies.multi_agent_managers.collaborative_shared_policy import MultiAgentCollaborativeSharedPolicy
 
@@ -48,16 +48,16 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--buffer-size", type=int, default=100000)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--n-step", type=int, default=4)
+    parser.add_argument("--n-step", type=int, default=1)
     parser.add_argument("--hidden-emb", type=int, default=128)
     parser.add_argument("--num-heads", type=int, default=4)
     parser.add_argument("--target-update-freq", type=int, default=500)
-    parser.add_argument("--epoch", type=int, default=100)
+    parser.add_argument("--epoch", type=int, default=10)
     parser.add_argument("--step-per-epoch", type=int, default=100000)
     parser.add_argument("--step-per-collect", type=int, default=10)
     parser.add_argument("--update-per-step", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--training-num", type=int, default=20)
+    parser.add_argument("--training-num", type=int, default=40)
     parser.add_argument("--test-num", type=int, default=100)
     parser.add_argument("--logdir", type=str, default="log")
     parser.add_argument("--render", type=float, default=0.)
@@ -67,6 +67,11 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume-path", type=str, default=None)
     parser.add_argument("--resume-id", type=str, default=None)
+    parser.add_argument("--mpr-policy",
+                        action="store_true",
+                        default=False,
+                        help="Use MPR policy")
+    parser.add_argument('--n-agents', type=int, choices=[20, 50], default=20)
     parser.add_argument(
         "--watch",
         default=False,
@@ -116,20 +121,22 @@ def get_parser() -> argparse.ArgumentParser:
 
 def get_args() -> argparse.Namespace:
     parser = get_parser().parse_known_args()[0]
-    parser.learning_algorithm = "dgn"
+    parser.learning_algorithm = "dgn_r"
     return parser
 
 
-def get_env(number_of_agents=NUMBER_OF_AGENTS,
+def get_env(number_of_agents=20,
             radius=RADIUS_OF_INFLUENCE,
             graph=None,
             render_mode=None,
+            is_scripted=False,
             is_testing=False,
             dynamic_graph=False):
     env = graph_env_v0.env(graph=graph,
                            render_mode=render_mode,
                            number_of_agents=number_of_agents,
                            radius=radius,
+                           is_scripted=is_scripted,
                            is_testing=is_testing,
                            dynamic_graph=dynamic_graph)
     return PettingZooEnv(env)
@@ -140,7 +147,7 @@ def get_agents(
         policy: BasePolicy = None,
         optim: torch.optim.Optimizer = None,
 ) -> Tuple[BasePolicy, torch.optim.Optimizer, List]:
-    env = get_env()
+    env = get_env(number_of_agents=args.n_agents)
     observation_space = env.observation_space['observation'] if isinstance(
         env.observation_space, (gym.spaces.Dict, gymnasium.spaces.Dict)
     ) else env.observation_space
@@ -161,7 +168,7 @@ def get_agents(
         elif args.aggregator_function == "global_add_pool":
             aggregator = global_add_pool
 
-        net = GATNetwork(
+        net = DGNRNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
@@ -192,9 +199,13 @@ def watch(
         args: argparse.Namespace = get_args(),
         masp_policy: BasePolicy = None,
 ) -> None:
-    weights_path = os.path.join(args.logdir, "mpr", "dgn", "weights", f"{args.model_name}")
+    weights_path = os.path.join(args.logdir, "mpr", "dgn_r", "weights", f"{args.model_name}")
 
-    env = DummyVectorEnv([lambda: get_env(is_testing=True, dynamic_graph=args.dynamic_graph, render_mode="human")])
+    env = DummyVectorEnv([lambda: get_env(number_of_agents=args.n_agents,
+                                          is_scripted=args.mpr_policy,
+                                          is_testing=True,
+                                          dynamic_graph=args.dynamic_graph,
+                                          render_mode="human")])
 
     if masp_policy is None:
         masp_policy = load_policy(weights_path, args, env)
@@ -202,8 +213,8 @@ def watch(
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
 
-    collector = MultiAgentCollector(masp_policy, env, exploration_noise=False, number_of_agents=NUMBER_OF_AGENTS)
-    # TODO Send here fps to collector
+    collector = MultiAgentCollector(masp_policy, env, exploration_noise=False,
+                                    number_of_agents=args.n_agents)
     result = collector.collect(n_episode=args.test_num)
 
     pprint.pprint(result)
@@ -219,8 +230,9 @@ def train_agent(
         optim: torch.optim.Optimizer = None,
         opt_trial: optuna.Trial = None
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([lambda: get_env() for i in range(args.training_num)])
-    test_envs = SubprocVectorEnv([lambda: get_env(is_testing=True)])
+    train_envs = SubprocVectorEnv([lambda: get_env(number_of_agents=args.n_agents) for i in range(args.training_num)])
+    test_envs = SubprocVectorEnv([lambda: get_env(number_of_agents=args.n_agents,
+                                                  is_testing=True)])
 
     # seed
     np.random.seed(args.seed)
@@ -258,7 +270,7 @@ def train_agent(
         writer = SummaryWriter(log_path)
         writer.add_text("args", str(args))
         logger.load(writer)
-    weights_path = os.path.join(args.logdir, "mpr", "dgn", "weights")
+    weights_path = os.path.join(args.logdir, "mpr", "dgn_r", "weights")
     Path(weights_path).mkdir(parents=True, exist_ok=True)
 
     def save_best_fn(pol):
@@ -352,7 +364,7 @@ def load_policy(path, args, env):
         q_param = {"hidden_sizes": args.dueling_q_hidden_sizes}
         v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
 
-        net = GATNetwork(
+        net = DGNRNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,

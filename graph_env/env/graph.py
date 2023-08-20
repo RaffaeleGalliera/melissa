@@ -8,7 +8,7 @@ from pettingzoo import AECEnv
 from pettingzoo.utils import wrappers
 import numpy as np
 from tianshou.data.batch import Batch
-from .utils.constants import NUMBER_OF_AGENTS, NUMBER_OF_FEATURES, RENDER_PAUSE
+from .utils.constants import NUMBER_OF_FEATURES, RENDER_PAUSE
 from .utils.core import World
 from .utils.selector import CustomSelector
 from torch_geometric.utils import from_networkx
@@ -41,7 +41,7 @@ class GraphEnv(AECEnv):
         super().__init__()
         self.seed()
         self.device = device
-
+        self.number_of_agents = number_of_agents
         self.render_mode = render_mode
         self.renderOn = False
         self.local_ratio = local_ratio
@@ -49,10 +49,10 @@ class GraphEnv(AECEnv):
         self.is_new_round = None
 
         self.world = World(graph=graph,
-                           number_of_agents=number_of_agents,
+                           number_of_agents=self.number_of_agents,
                            radius=radius,
                            np_random=self.np_random,
-                           is_scripted=False,
+                           is_scripted=is_scripted,
                            is_testing=is_testing,
                            random_graph=random_graph,
                            dynamic_graph=dynamic_graph)
@@ -95,7 +95,7 @@ class GraphEnv(AECEnv):
 
         self.max_cycles = max_cycles
         self.num_moves = 0
-        self.current_actions = [None] * NUMBER_OF_AGENTS
+        self.current_actions = [None] * self.number_of_agents
 
         self.reset()
 
@@ -218,7 +218,7 @@ class GraphEnv(AECEnv):
         self._agent_selector.enable(self.agents)
 
         self.agent_selection = self._agent_selector.next()
-        self.current_actions = [None] * NUMBER_OF_AGENTS
+        self.current_actions = [None] * self.number_of_agents
 
     # Tianshou PettingZoo Wrapper returns the reward of every agent in a single
     # time not using CumulativeReward
@@ -269,14 +269,14 @@ class GraphEnv(AECEnv):
             self.agent_selection = self._agent_selector.next()
 
             # previous_agent = self.agent_selection
-            self.current_actions = [None] * NUMBER_OF_AGENTS
+            self.current_actions = [None] * self.number_of_agents
 
             n_received = sum(
                 [1 for agent in self.world.agents if
                  sum(agent.state.received_from) or agent.state.message_origin]
             )
 
-            if n_received == NUMBER_OF_AGENTS and self.render_mode == 'human':
+            if n_received == self.number_of_agents and self.render_mode == 'human':
                 cds = [agent.id for agent in self.world.agents if agent.messages_transmitted > 0]
                 print(
                     f"Every agent has received the message, terminating in {self.num_moves}, "
