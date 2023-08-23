@@ -1,16 +1,20 @@
 import os.path
-import math
+
 import torch
 import optuna
 import logging
 
+from graph_env.env.utils.hyp_optimizer.pareto_front import get_pareto_front_trials, plot_pareto_front
 from optuna.pruners import MedianPruner, SuccessiveHalvingPruner, NopPruner, BasePruner
 from optuna.samplers import TPESampler, RandomSampler, BaseSampler
+from optuna.study import StudyDirection
+from optuna.trial import TrialState
 from optuna.visualization import plot_optimization_history, plot_param_importances
 from tianshou.env import DummyVectorEnv
 from graph_env.env.utils.collectors.collector import MultiAgentCollector
 from train_dqn import get_args, train_agent, get_env
 from .constants import NUMBER_OF_AGENTS
+from plotly.graph_objects import Figure
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -26,13 +30,14 @@ def dqn_params_set(trial, args):
     args.eps_train_final = trial.suggest_uniform("eps_train_final", 0, 0.2)  # def 0.05
     args.exploration_fraction = trial.suggest_uniform("exploration_fraction", 0.5, 0.8)  # def 0.6
     args.update_per_step = trial.suggest_categorical("update_per_step", [0.1, 0.5, 1])  # def 0.1
-    args.step_per_collect = trial.suggest_categorical("step_per_collect", [5, 10, 50, 100])  # def 10
+    args.step_per_collect = trial.suggest_categorical("step_per_collect", [10, 50, 100])  # def 10
     args.target_update_freq = trial.suggest_categorical("target_update_freq", [100, 500, 1000, 5000])  # def 500
     args.aggregator_function = trial.suggest_categorical("aggregator_function",
-                                                         ["global_max_pool", "global_add_pool", "global_mean_pool"]) # def "global_max_pool"
+                                                         ["global_max_pool", "global_add_pool", "global_mean_pool"])
+    # def "global_max_pool"
 
 
-def objective(trial):
+def objective(trial: optuna.Trial):
     # Get args, where hyperparams are defined and let optuna change them
     args = get_args()
 
@@ -49,7 +54,11 @@ def objective(trial):
     # Average metric is extracted
     avg_spread_factor = test_result['spread_factor_mean']
 
-    # This metric force the reward to be in the [0,1] range and multiplies it by the coverage
+    # Average coverage and messages are saved for Pareto front plot
+    trial.set_user_attr("cov", test_result["coverage"])
+    trial.set_user_attr("msg", test_result["msg"])
+
+    # The metric result is returned
     return avg_spread_factor
 
 
@@ -140,21 +149,52 @@ def hyperparams_opt():
     except KeyboardInterrupt:
         pass
 
-    # Print final results after all the trials
-    trial = study.best_trial
+    # Completed trials are extracted
+    completed_trials = [trial for trial in study.trials if trial.state == TrialState.COMPLETE]
+    # Best trial according to metric is extracted
+    best_metric_trial = study.best_trial
+    # Trials on the Pareto front are extracted, state of all trials is calculated for color plot
+    best_trials, trials_state = get_pareto_front_trials(completed_trials, [StudyDirection(2), StudyDirection(1)])
+    # Best trial according to the metric is marked to be colored with a different color in the pareto plot
+    for i in range(0, len(completed_trials)):
+        if completed_trials[i].number == best_metric_trial.number:
+            trials_state[i] = 2
 
-    print("Number of finished trials: ", len(study.trials))
+    # General results are printed
+    print("Total number of trials: ", len(study.trials))
+    print("Number of completed trials: ", len(completed_trials))
 
-    print("Best trial:")
-    print(f"  Value: {trial.value}")
+    # Best trial information
+    print("Best trial according to metric:")
+    print(f"   Number: {best_metric_trial.number}")
+    print(f"  Value: {best_metric_trial.value}")
 
     print("  Params: ")
-    for key, value in trial.params.items():
+    for key, value in best_metric_trial.params.items():
         print(f"    {key}: {value}")
 
-    print("  User attrs:")
-    for key, value in trial.user_attrs.items():
+    print("  Metrics:")
+    for key, value in best_metric_trial.user_attrs.items():
         print(f"    {key}: {value}")
+
+    # Pareto Front trials information
+    print(f"\nNumber of trials on the Pareto front: {len(best_trials)}\n")
+    print("--- Best Trials ---")
+    for trial in best_trials:
+        print("Trial " + str(trial.number) + ": [cov=" + str(trial.user_attrs['cov']) + ", msg=" + str(trial.user_attrs['msg']) + "]")
+        print("Hyperparameters set = " + str(trial.params))
+
+    trial_with_highest_coverage = max(best_trials, key=lambda t: t.user_attrs['cov'])
+    print(f"Trial with highest coverage: ")
+    print(f"\tnumber: {trial_with_highest_coverage.number}")
+    print(f"\tparams: {trial_with_highest_coverage.params}")
+    print(f"\tvalues: {trial_with_highest_coverage.user_attrs}")
+
+    trial_with_lowest_messages = min(best_trials, key=lambda t: t.user_attrs['msg'])
+    print(f"Trial with lowest messages: ")
+    print(f"\tnumber: {trial_with_lowest_messages.number}")
+    print(f"\tparams: {trial_with_lowest_messages.params}")
+    print(f"\tvalues: {trial_with_lowest_messages.user_attrs}")
 
     # Write and save trial report on a csv
     path_results = "hyp_studies/results/"
@@ -168,9 +208,13 @@ def hyperparams_opt():
     # with open("study.pkl", "wb+") as f:
     # pkl.dump(study, f)
 
-    # Plot optimization history and param importance
+    # Plot optimization history, hyperparameter importance and pareto front
     fig1 = plot_optimization_history(study)
     fig2 = plot_param_importances(study)
+    fig3 = plot_pareto_front(completed_trials, trials_state)
+
     fig1.show()
     fig2.show()
+    fig3.show()
+
 
