@@ -19,14 +19,17 @@ from tianshou.env.pettingzoo_env import PettingZooEnv
 from tianshou.policy import BasePolicy
 from tianshou.trainer import offpolicy_trainer
 from tianshou.policy.modelfree.dqn import DQNPolicy
-from torch_geometric.nn import global_max_pool, global_mean_pool, global_add_pool
+from torch_geometric.nn import global_max_pool, global_mean_pool, \
+    global_add_pool
 
 from graph_env import graph_env_v0
-from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE, NUMBER_OF_FEATURES
+from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE, \
+    NUMBER_OF_FEATURES
 from graph_env.env.utils.logger import CustomLogger
 
 from graph_env.env.utils.networks.l_dgn import LDGNNetwork
-from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
+from graph_env.env.utils.policies.multi_agent_managers.shared_policy import \
+    MultiAgentSharedPolicy
 
 from graph_env.env.utils.collectors.collector import MultiAgentCollector
 from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
@@ -61,10 +64,14 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--test-num", type=int, default=100)
     parser.add_argument("--logdir", type=str, default="log")
     parser.add_argument("--render", type=float, default=0.)
-    parser.add_argument('--dueling-q-hidden-sizes', type=int, nargs='*', default=[128, 128])
-    parser.add_argument('--dueling-v-hidden-sizes', type=int, nargs='*', default=[128, 128])
-    parser.add_argument("--aggregator-function", type=str, default="global_max_pool")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument('--dueling-q-hidden-sizes', type=int, nargs='*',
+                        default=[128, 128])
+    parser.add_argument('--dueling-v-hidden-sizes', type=int, nargs='*',
+                        default=[128, 128])
+    parser.add_argument("--aggregator-function", type=str,
+                        default="global_max_pool")
+    parser.add_argument("--device", type=str,
+                        default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume-path", type=str, default=None)
     parser.add_argument("--resume-id", type=str, default=None)
     parser.add_argument("--mpr-policy",
@@ -93,10 +100,13 @@ def get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument("--save-buffer-name", type=str, default=None)
-    parser.add_argument("--model-name", type=str, default=datetime.datetime.now().strftime("%y%m%d-%H%M%S"))
+    parser.add_argument("--model-name", type=str,
+                        default=datetime.datetime.now().strftime(
+                            "%y%m%d-%H%M%S"))
 
     parser.add_argument(
-        "--optimize", "--optimize-hyperparameters", action="store_true", default=False,
+        "--optimize", "--optimize-hyperparameters", action="store_true",
+        default=False,
         help="Run hyperparameters search"
     )
 
@@ -125,13 +135,15 @@ def get_args() -> argparse.Namespace:
     return parser
 
 
-def get_env(number_of_agents=20,
-            radius=RADIUS_OF_INFLUENCE,
-            graph=None,
-            render_mode=None,
-            is_scripted=False,
-            is_testing=False,
-            dynamic_graph=False):
+def get_env(
+        number_of_agents=20,
+        radius=RADIUS_OF_INFLUENCE,
+        graph=None,
+        render_mode=None,
+        is_scripted=False,
+        is_testing=False,
+        dynamic_graph=False
+):
     env = graph_env_v0.env(graph=graph,
                            render_mode=render_mode,
                            number_of_agents=number_of_agents,
@@ -199,7 +211,8 @@ def watch(
         args: argparse.Namespace = get_args(),
         masp_policy: BasePolicy = None,
 ) -> None:
-    weights_path = os.path.join(args.logdir, "mpr", "l_dgn", "weights", f"{args.model_name}")
+    weights_path = os.path.join(args.logdir, "mpr", "l_dgn", "weights",
+                                f"{args.model_name}")
 
     env = DummyVectorEnv([lambda: get_env(number_of_agents=args.n_agents,
                                           is_scripted=args.mpr_policy,
@@ -230,9 +243,12 @@ def train_agent(
         optim: torch.optim.Optimizer = None,
         opt_trial: optuna.Trial = None
 ) -> Tuple[dict, BasePolicy]:
-    train_envs = SubprocVectorEnv([lambda: get_env(number_of_agents=args.n_agents) for i in range(args.training_num)])
-    test_envs = SubprocVectorEnv([lambda: get_env(number_of_agents=args.n_agents,
-                                                  is_testing=True)])
+    train_envs = SubprocVectorEnv(
+        [lambda: get_env(number_of_agents=args.n_agents) for i in
+         range(args.training_num)])
+    test_envs = SubprocVectorEnv(
+        [lambda: get_env(number_of_agents=args.n_agents,
+                         is_testing=True)])
 
     # seed
     np.random.seed(args.seed)
@@ -240,7 +256,8 @@ def train_agent(
     train_envs.seed(args.seed)
     test_envs.seed(args.seed)
 
-    masp_policy, optim, agents = get_agents(args, policy=masp_policy, optim=optim)
+    masp_policy, optim, agents = get_agents(args, policy=masp_policy,
+                                            optim=optim)
 
     # collector
     train_collector = MultiAgentCollector(
@@ -289,8 +306,10 @@ def train_agent(
 
     def train_fn(epoch, env_step):
         decay_factor = (1 - pow(e, (
-                    log(args.eps_train_final) / (args.exploration_fraction * args.epoch * args.step_per_epoch))))
-        eps = max(args.eps_train * (1 - decay_factor) ** env_step, args.eps_train_final)
+                log(args.eps_train_final) / (
+                    args.exploration_fraction * args.epoch * args.step_per_epoch))))
+        eps = max(args.eps_train * (1 - decay_factor) ** env_step,
+                  args.eps_train_final)
         masp_policy.policy.set_eps(eps)
         if not args.optimize:
             if env_step % 1000 == 0:
@@ -347,7 +366,8 @@ def train_agent(
 
     print(f"Saving {args.model_name} last")
     torch.save(
-        masp_policy.policy.state_dict(), os.path.join(f"{weights_path}", f"{args.model_name}_last.pth")
+        masp_policy.policy.state_dict(),
+        os.path.join(f"{weights_path}", f"{args.model_name}_last.pth")
     )
 
     return result, masp_policy

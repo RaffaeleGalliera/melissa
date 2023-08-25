@@ -347,7 +347,6 @@ class GraphEnv(AECEnv):
                                 sum(self.world.agents[index].state.received_from) == 0
                                 and self.world.agents[index].state.message_origin == 0]
             penalty_2 = max(uncovered_n_lens) if len(uncovered_n_lens) else 0
-            penalty_2 = penalty_2
             reward = reward - penalty_2
 
         return reward

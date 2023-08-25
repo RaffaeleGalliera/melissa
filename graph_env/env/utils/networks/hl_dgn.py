@@ -5,7 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tianshou.utils.net.common import MLP
 from torch_geometric.nn import GATv2Conv, GAT
-from torch_geometric.nn import global_mean_pool, global_add_pool, global_max_pool
+from torch_geometric.nn import global_mean_pool, global_add_pool, \
+    global_max_pool
 
 from torch_geometric.data.data import Data
 from torch_geometric.data.batch import Batch as PyGeomBatch
@@ -17,20 +18,24 @@ def to_pytorch_geometric_batch(obs, device):
                                            dtype=torch.float32),
                          edge_index=torch.as_tensor(observation[0],
                                                     device=device,
-                                                    dtype=torch.int)) for observation in obs.observation]
+                                                    dtype=torch.int)) for
+                    observation in obs.observation]
     return PyGeomBatch.from_data_list(observations)
 
 
 class HLDGNNetwork(nn.Module):
-    def __init__(self,
-                 input_dim,
-                 hidden_dim,
-                 output_dim,
-                 num_heads,
-                 features_only=False,
-                 dueling_param: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None,
-                 device='cpu',
-                 aggregator_function=global_max_pool):
+    def __init__(
+            self,
+            input_dim,
+            hidden_dim,
+            output_dim,
+            num_heads,
+            features_only=False,
+            dueling_param: Optional[
+                Tuple[Dict[str, Any], Dict[str, Any]]] = None,
+            device='cpu',
+            aggregator_function=global_max_pool
+    ):
         super(HLDGNNetwork, self).__init__()
         self.aggregator_function = aggregator_function
         self.device = device

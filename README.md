@@ -90,3 +90,4 @@ All topologies can be download [here](https://drive.google.com/file/d/1Osnw_jqmI
 
 ### Hyperparameter Optimization
 An automated hyperparameter optimization study can be run using the `hyperparameter_optimization.py` script. The script will run a grid search over the hyperparameters defined in the `hyperparameter_optimization.py` file. The results of the study will be saved in the `hyp_studies` folder. To run the study, run a training experiment specifying the `--optimize` flag.
+You can specify the maximum number of trials with `--trials` flag and the maximum number of epochs per trial with `--epoch` flag. 
