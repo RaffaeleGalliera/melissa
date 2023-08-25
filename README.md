@@ -18,20 +18,20 @@ The framework is written in Python and is based on PyTorch. It implements a cust
 
 1. Build the Docker image:
    ```bash
-   docker build -t marl_mpr .
+   docker build -t Melissa .
 2. For machines without a GPU or Apple Mac devices (including ones employing Apple MX SoC):
     ```bash
-     docker build -t marl_mpr -f Dockefile.cpu .
+     docker build -t Melissa -f Dockefile.cpu .
     ```
 3. Run the container:
     ```bash
-    docker run --ipc=host --gpus all -v ${PWD}:/home/devuser/dev:Z -it --rm marl_mpr
+    docker run --ipc=host --gpus all -v ${PWD}:/home/devuser/dev:Z -it --rm Melissa
     ```
 4. (Optional) Visualization:
 
     To visualize agents in action on testing graphs, use the following command:
     ```bash
-   docker run --ipc=host --gpus all -e DISPLAY=unix$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -v ${PWD}:/home/devuser/dev:Z -it --rm marl_mpr
+   docker run --ipc=host --gpus all -e DISPLAY=unix$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -v ${PWD}:/home/devuser/dev:Z -it --rm Melissa
     ```
     Alternatively, you can install the requirements in a Python (≥ 3.8) virtual environment:
     ```bash 
