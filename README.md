@@ -1,4 +1,4 @@
-# [WIP] A Multi Agent Reinforcement Learning Environment for Message Dissemination
+# Melissa - A Multi-Agent Reinforcement Learning Environment for Message Dissemination
  
 The framework is written in Python and is based on PyTorch. It implements a customized extension of the Tianshou framework and defines the MARL environment following the PettingZoo API. The GAT and global max pooling employ the implementation provided by PyTorch Geometric. Training and testing graphs were generated with the aid of the NetworkX library.
 
