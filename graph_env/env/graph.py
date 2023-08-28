@@ -8,7 +8,7 @@ from pettingzoo import AECEnv
 from pettingzoo.utils import wrappers
 import numpy as np
 from tianshou.data.batch import Batch
-from .utils.constants import NUMBER_OF_AGENTS, NUMBER_OF_FEATURES, RENDER_PAUSE
+from .utils.constants import NUMBER_OF_FEATURES, RENDER_PAUSE
 from .utils.core import World
 from .utils.selector import CustomSelector
 from torch_geometric.utils import from_networkx
@@ -41,7 +41,7 @@ class GraphEnv(AECEnv):
         super().__init__()
         self.seed()
         self.device = device
-
+        self.number_of_agents = number_of_agents
         self.render_mode = render_mode
         self.renderOn = False
         self.local_ratio = local_ratio
@@ -49,10 +49,10 @@ class GraphEnv(AECEnv):
         self.is_new_round = None
 
         self.world = World(graph=graph,
-                           number_of_agents=number_of_agents,
+                           number_of_agents=self.number_of_agents,
                            radius=radius,
                            np_random=self.np_random,
-                           is_scripted=False,
+                           is_scripted=is_scripted,
                            is_testing=is_testing,
                            random_graph=random_graph,
                            dynamic_graph=dynamic_graph)
@@ -95,7 +95,7 @@ class GraphEnv(AECEnv):
 
         self.max_cycles = max_cycles
         self.num_moves = 0
-        self.current_actions = [None] * NUMBER_OF_AGENTS
+        self.current_actions = [None] * self.number_of_agents
 
         self.reset()
 
@@ -170,15 +170,15 @@ class GraphEnv(AECEnv):
         # Every entry needs to be wrapped in a Batch object, otherwise
         # we will have shape errors in the data replay buffer
         edge_index = np.asarray(agent_observation.edge_index, dtype=np.int32)
-        features = np.asarray(agent_observation.features, dtype=np.float32)
+        features = np.asarray(agent_observation.features_actor, dtype=np.float32)
 
         # Store Network for Total/Neighbourhood-wise VDN
         # network = networkx.ego_graph(self.world.graph, agent.id, undirected=True, radius=2)
         network = from_networkx(self.world.graph)
         network_edge_index = np.asarray(network.edge_index, np.int32)
-        network_features = np.asarray(network.features, dtype=np.float32)
+        network_features = np.asarray(network.features_actor, dtype=np.float32)
 
-        labels = np.asarray(agent_observation.label, dtype=object)
+        labels = np.asarray(network.label, dtype=object)
         data = Batch.stack([Batch(observation=edge_index),
                             Batch(observation=labels),
                             Batch(observation=features),
@@ -193,11 +193,6 @@ class GraphEnv(AECEnv):
         # there is no need to prohibit non transmission
         agent.allowed_actions[0] = False if sum([1 for index in one_hop_neighbor_indices if sum(
             self.world.agents[index].one_hop_neighbours_ids) == 1]) and not sum(agent.state.transmitted_to) else True
-
-        # agent_observation_with_mask = {
-        #     "observation": data,
-        #     "action_mask": agent.allowed_actions
-        # }
 
         return data
 
@@ -223,7 +218,7 @@ class GraphEnv(AECEnv):
         self._agent_selector.enable(self.agents)
 
         self.agent_selection = self._agent_selector.next()
-        self.current_actions = [None] * NUMBER_OF_AGENTS
+        self.current_actions = [None] * self.number_of_agents
 
     # Tianshou PettingZoo Wrapper returns the reward of every agent in a single
     # time not using CumulativeReward
@@ -274,18 +269,19 @@ class GraphEnv(AECEnv):
             self.agent_selection = self._agent_selector.next()
 
             # previous_agent = self.agent_selection
-            self.current_actions = [None] * NUMBER_OF_AGENTS
+            self.current_actions = [None] * self.number_of_agents
 
             n_received = sum(
                 [1 for agent in self.world.agents if
                  sum(agent.state.received_from) or agent.state.message_origin]
             )
 
-            if n_received == NUMBER_OF_AGENTS and self.render_mode == 'human':
+            if n_received == self.number_of_agents and self.render_mode == 'human':
+                cds = [agent.id for agent in self.world.agents if agent.messages_transmitted > 0]
                 print(
                     f"Every agent has received the message, terminating in {self.num_moves}, "
                     f"messages transmitted: {self.world.messages_transmitted}")
-
+                print(cds)
             if self.render_mode == 'human':
                 self.render()
 
@@ -344,14 +340,14 @@ class GraphEnv(AECEnv):
 
         reward = agent.two_hop_cover / len(two_hop_neighbor_indices)
         if sum(agent.state.transmitted_to):
-            penalty_1 = sum([sum(self.world.agents[index].state.transmitted_to)/len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if
-                             sum(self.world.agents[index].state.transmitted_to)]) / len(one_hop_neighbor_indices)
+            penalty_1 = sum([self.world.agents[index].messages_transmitted for index in one_hop_neighbor_indices]) / len(one_hop_neighbor_indices)
             reward = reward - penalty_1
         if not sum(agent.state.transmitted_to):
-            penalty_2 = sum([1 for index in one_hop_neighbor_indices if
-                           sum(self.world.agents[index].state.received_from) == 0
-                           or self.world.agents[index].state.message_origin == 0]) / len(one_hop_neighbor_indices)
-            reward = reward - 3/4 * penalty_2
+            uncovered_n_lens = [len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if
+                                sum(self.world.agents[index].state.received_from) == 0
+                                and self.world.agents[index].state.message_origin == 0]
+            penalty_2 = max(uncovered_n_lens) if len(uncovered_n_lens) else 0
+            reward = reward - penalty_2
 
         return reward
 

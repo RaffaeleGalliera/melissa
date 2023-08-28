@@ -37,6 +37,11 @@ class MultiAgentCollector(Collector):
         self.done = np.full((len(env),), False)
         self.next_done = np.full((len(env),), False)
         self.to_be_reset = np.full((len(env),), False)
+        self.environment_step = np.full((len(env),), False)
+        self.rews = np.zeros((len(env), number_of_agents))
+        self.master_episode_rews = np.zeros((len(env),))
+        self.envs_to_step_exps = Batch()
+        self.exps = None
         super().__init__(policy,
                          env,
                          buffer,
@@ -108,6 +113,7 @@ class MultiAgentCollector(Collector):
         episode_count = 0
         master_episode_count = 0
         episode_rews = []
+        master_episode_rew = []
         episode_lens = []
         episode_start_indices = []
         coverage = []
@@ -159,6 +165,7 @@ class MultiAgentCollector(Collector):
                     # This done signal is referred to the next observation
                     # (next agent), not the one we are gathering now
                     next_done = np.logical_or(terminated, truncated)
+                    self.rews[ready_env_ids[available]] = rew
                 elif len(result) == 4:
                     obs_next, rew, done, info = result
                     if isinstance(info, dict):
@@ -215,6 +222,12 @@ class MultiAgentCollector(Collector):
                     for info_item in info
                 ]
             )
+            self.environment_step = np.array(
+                [
+                    info_item.get("environment_step", False)
+                    for info_item in info
+                ]
+            )
 
             # This information will NOT update obs while updating its rewards
             # so it gives r and done referred to step t-1 and step t
@@ -239,27 +252,63 @@ class MultiAgentCollector(Collector):
                     )
                 )
 
+            # Add rew to exps after they all stepped
+            if self.exps is not None:
+                self.exps.rew = self.rews[self.exps.info.env_id]
+                # Calculate buffer_ids and exps_indices in a vectorized manner
+                buffer_ids = (self.exps.info.env_id * self.number_of_agents) + self.exps.obs.agent_id.astype(int)
+                exps_indices = np.array([x.last_index + self.buffer._offset[i] for
+                                x, i in zip(self.buffer.buffers[buffer_ids],
+                                            buffer_ids)]).flatten()
+                # Update indices for VDN
+                indices = np.full((self.env_num, self.number_of_agents), -1, dtype=np.int64)
+                row_indices = self.exps.info.env_id
+                col_indices = self.exps.obs.agent_id.astype(int)
+                indices[row_indices, col_indices] = exps_indices
+
+                self.exps.info.update(indices=indices[self.exps.info.env_id])
+
+                # Add experiences to buffer
+                ptr, ep_rew, ep_len, ep_idx = self.buffer.add(
+                    self.exps,
+                    buffer_ids=buffer_ids
+                )
+
+                # Check that we don't have multiple entries for the same env, agent_id tuple
+                # ass   ert len(list(zip(self.exps.obs.agent_id, self.exps.info.env_id))) == len(set(zip(self.exps.obs.agent_id, self.exps.info.env_id)))
+
+                # Add stats for done environments
+                if np.any(self.exps.done):
+                    done_eps = np.where(self.exps.done)[0]
+                    episode_count += len(done_eps)
+                    episode_lens.append(ep_len[done_eps])
+                    episode_rews.append(ep_rew[done_eps, self.exps.obs.agent_id[done_eps].astype(int)])
+                    for env, rew in zip(self.exps.info.env_id[done_eps], ep_rew[done_eps, self.exps.obs.agent_id[done_eps].astype(int)]):
+                        self.master_episode_rews[env] += rew
+                    episode_start_indices.append(ep_idx[done_eps])
+                # assert not np.any(ep_len > 5)
+                self.exps = None
+
             if render:
                 self.env.render()
                 if render > 0 and not np.isclose(render, 0):
                     time.sleep(render)
 
-            # add data into the buffer
-            ptr, ep_rew, ep_len, ep_idx = self.buffer.add(
-                self.data, buffer_ids=((ready_env_ids * self.number_of_agents) + self.data.obs.agent_id.astype(int))
-            )
+            self.envs_to_step_exps = Batch.cat(
+                (self.envs_to_step_exps, self.data))
 
-            assert not np.any(ep_len > 5)
-            # collect statistics
-            step_count += len(ready_env_ids)
+            if self.environment_step.any():
+                stepping_envs = np.where(self.environment_step)[0]
+                step_count += len(stepping_envs)
 
-            if np.any(self.done):
-                env_ind_local = np.where(self.done)[0]
+                envs_to_step_exps_indices = self.envs_to_step_exps.info.env_id
 
-                episode_count += len(env_ind_local)
-                episode_lens.append(ep_len[env_ind_local])
-                episode_rews.append(ep_rew[np.ix_(env_ind_local, self.data.obs[env_ind_local].agent_id.astype(int))][:, 0])
-                episode_start_indices.append(ep_idx[env_ind_local])
+                # Filter experiences for the stepping environments
+                self.exps = self.envs_to_step_exps[np.isin(envs_to_step_exps_indices, stepping_envs)]
+
+                # Remove experiences from envs_to_step_exps
+                self.envs_to_step_exps = self.envs_to_step_exps[
+                    ~np.isin(envs_to_step_exps_indices, stepping_envs)]
 
             # episode rews should be gathered when an agent's episode is done not
             # when everyone resets
@@ -267,6 +316,8 @@ class MultiAgentCollector(Collector):
                 env_ind_local = ready_to_reset
                 env_ind_global = ready_env_ids[env_ind_local]
                 master_episode_count += len(env_ind_local)
+                master_episode_rew.append(self.master_episode_rews[env_ind_global])
+                self.master_episode_rews[env_ind_global] = 0
                 coverage.append(self.data.info.coverage[env_ind_local])
                 messages_transmitted.append(self.data.info.messages_transmitted[env_ind_local])
                 # now we copy obs_next to obs, but since there might be
@@ -314,7 +365,7 @@ class MultiAgentCollector(Collector):
             )
             self.reset_env()
 
-        if master_episode_count or episode_count > 0:
+        if episode_count > 0:
             rews, lens, idxs = list(
                 map(
                     np.concatenate,
@@ -328,20 +379,18 @@ class MultiAgentCollector(Collector):
             rew_mean = rew_std = len_mean = len_std = 0
 
         if master_episode_count > 0:
-            msgs, coverages = list(
+            msgs, coverages, master_episodes_rew = list(
                 map(
                     np.concatenate,
-                    [messages_transmitted, coverage]
+                    [messages_transmitted, coverage, master_episode_rew]
                 )
             )
             msg_mean, msg_std = msgs.mean(), msgs.std()
             coverage_mean, coverage_std = coverages.mean(), coverages.std()
-            # Spread factor: how "fast" a message is spread through the network
-            spread_factor = (coverages/np.sqrt(msgs))
-            spread_factor_mean = spread_factor.mean()
+            master_episodes_rew_mean, master_episodes_rew_std = master_episodes_rew.mean(), master_episodes_rew.std()
         else:
-            msgs, coverages, spread_factor = np.array([]), np.array([], int), np.array([])
-            msg_mean = msg_std = coverage_mean = coverage_std = spread_factor_mean = 0
+            msgs, coverages, master_episodes_rew = np.array([]), np.array([], int), np.array([], int)
+            msg_mean = msg_std = coverage_mean = coverage_std = master_episodes_rew_mean = master_episodes_rew_std =  0
 
         return {
             "n/ep": episode_count,
@@ -358,8 +407,8 @@ class MultiAgentCollector(Collector):
             "len_std": len_std,
             "coverage": coverage_mean,
             "coverage_std": coverage_std,
-            "spread_factor": spread_factor,
-            "spread_factor_mean": spread_factor_mean,
             "msg": msg_mean,
-            "msg_std": msg_std
+            "msg_std": msg_std,
+            "master_episode_rew": master_episodes_rew_mean,
+            "master_episode_rew_std": master_episodes_rew_std
         }

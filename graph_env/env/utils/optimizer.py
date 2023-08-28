@@ -12,8 +12,7 @@ from optuna.trial import TrialState
 from optuna.visualization import plot_optimization_history, plot_param_importances
 from tianshou.env import DummyVectorEnv
 from graph_env.env.utils.collectors.collector import MultiAgentCollector
-from train_dqn import get_args, train_agent, get_env
-from .constants import NUMBER_OF_AGENTS
+from l_dgn import get_args, train_agent, get_env
 from plotly.graph_objects import Figure
 
 logging.getLogger().setLevel(logging.INFO)
@@ -64,12 +63,16 @@ def objective(trial: optuna.Trial):
 
 def test_agent(args, masp_policy):
     # Testing environment are extracted
-    env = DummyVectorEnv([lambda: get_env(is_testing=True, render_mode=None, dynamic_graph=args.dynamic_graph)])
+    env = DummyVectorEnv([lambda: get_env(number_of_agents=args.n_agents,
+                                          is_testing=True,
+                                          render_mode=None,
+                                          dynamic_graph=args.dynamic_graph)])
 
     # Policy is evaluated
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
-    collector = MultiAgentCollector(masp_policy, env, exploration_noise=True, number_of_agents=NUMBER_OF_AGENTS)
+    collector = MultiAgentCollector(masp_policy, env, exploration_noise=True,
+                                    number_of_agents=args.n_agents)
 
     # Test results are collected
     result = collector.collect(n_episode=args.test_num)

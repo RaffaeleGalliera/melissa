@@ -1,4 +1,5 @@
 import copy
+from itertools import cycle
 import glob
 import pickle
 import numpy as np
@@ -71,6 +72,13 @@ def mpr_heuristic(one_hop_neighbours_ids,
     return mpr
 
 
+# Static method that calculate random movement for the agents if the graph is dynamic
+def compute_random_movement(num_agents, step):
+    ox = [step * np.random.uniform(-1, 1) for _ in range(num_agents)]
+    oy = [step * np.random.uniform(-1, 1) for _ in range(num_agents)]
+    return ox, oy
+
+
 class State:
     def __init__(self):
         self.received_from = None
@@ -125,7 +133,8 @@ class Agent:
                       local_view=local_view,
                       state=self.state,
                       pos=pos,
-                      one_hop_neighbors_ids=one_hop_neighbours_ids)
+                      one_hop_neighbors_ids=one_hop_neighbours_ids,
+                      is_scripted=self.is_scripted)
 
     def update_local_view(self, local_view):
         # local_view is updated
@@ -149,13 +158,6 @@ class Agent:
 
         self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
         self.two_hop_cover = new_two_hop_cover
-
-
-# Static method that calculate random movement for the agents if the graph is dynamic
-def compute_random_movement(step):
-    ox = [step * np.random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
-    oy = [step * np.random.uniform(-1, 1) for _ in range(constants.NUMBER_OF_AGENTS)]
-    return ox, oy
 
 
 # In this world the agents select if they are on the MPR set or not
@@ -188,9 +190,9 @@ class World:
         self.pre_move_graph = None
         self.pre_move_agents = None
         if self.is_testing:
-            self.graphs = glob.glob(constants.TESTING_PATH)
+            self.graphs = cycle(glob.glob(f"graph_topologies/testing_{self.num_agents}/*"))
         else:
-            self.graphs = glob.glob(constants.TRAINING_PATH)
+            self.graphs = glob.glob(f"graph_topologies/training_{self.num_agents}/*")
         self.reset()
 
     # return all agents controllable by external policies
@@ -257,26 +259,33 @@ class World:
 
     def update_agent_features(self, agent):
         # Update graph
-        self.graph.nodes[agent.id]['features'] = [
+        self.graph.nodes[agent.id]['features_critic'] = [
             sum(agent.one_hop_neighbours_ids),
             agent.messages_transmitted,
             agent.steps_taken
         ]
-        self.graph.nodes[agent.id]['features'] = np.concatenate(
-            (self.graph.nodes[agent.id]['features'],
+
+        self.graph.nodes[agent.id]['features_actor'] = [
+            sum(agent.one_hop_neighbours_ids),
+            agent.messages_transmitted
+        ]
+
+        self.graph.nodes[agent.id]['features_critic'] = np.concatenate(
+            (self.graph.nodes[agent.id]['features_critic'],
              agent.actions_history)
         )
 
+        self.graph.nodes[agent.id]['features_actor'] = np.concatenate(
+            (self.graph.nodes[agent.id]['features_actor'],
+             agent.actions_history)
+        )
+
+    def update_local_graph(self, agent):
         agent.update_local_view(
             local_view=nx.ego_graph(self.graph, agent.id,
                                     undirected=True))
 
         agent.update_two_hop_cover_from_one_hopper(self.agents)
-
-    def update_local_graph(self, agent):
-        agent.local_view = nx.ego_graph(self.graph,
-                                        agent.id,
-                                        undirected=True)
 
     def move_graph(self):
         # Graph and agent state is saved for visualization
@@ -297,12 +306,12 @@ class World:
         pos = nx.get_node_attributes(self.graph, "pos")
 
         # Given the step size, compute the x and y movement for each agent
-        offset_x, offset_y = compute_random_movement(step)
+        offset_x, offset_y = compute_random_movement(self.num_agents, step)
 
         # Update positions of the agents
         pos = {k: [v[0] + offset_x[k], v[1] + offset_y[k]] for k, v in pos.items()}
         nx.set_node_attributes(self.graph, pos, "pos")
-        for i in range(constants.NUMBER_OF_AGENTS):
+        for i in range(self.num_agents):
             self.agents[i].pos[0] += offset_x[i]
             self.agents[i].pos[1] += offset_y[i]
 
@@ -345,11 +354,12 @@ class World:
         if self.random_graph:
             self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
         elif not self.is_graph_fixed:
-            self.graph = load_graph(
-                self.np_random.choice(self.graphs,
-                                      replace=False if self.is_testing else True
-                                      )
-            )
+            if self.is_testing:
+                self.graph = load_graph(next(self.graphs))
+            else:
+                self.graph = load_graph(
+                    self.np_random.choice(self.graphs, replace=True)
+                )
 
         self.agents = [Agent(i,
                              nx.ego_graph(self.graph, i, undirected=True),
@@ -363,7 +373,8 @@ class World:
         for agent in self.agents:
             agent.state.reset(self.num_agents)
             self.update_one_hop_neighbors(agent)
-            self.graph.nodes[agent.id]['features'] = np.zeros((7,))
+            self.graph.nodes[agent.id]['features_actor'] = np.zeros((6,))
+            self.graph.nodes[agent.id]['features_critic'] = np.zeros((7,))
             self.graph.nodes[agent.id]['label'] = agent.id
 
         actions_dim = np.ones(2)
@@ -382,6 +393,9 @@ class World:
             agent.truncated = False
 
             self.update_agent_features(agent)
+
+        for agent in self.agents:
+            self.update_local_graph(agent)
 
         random_agent.state.message_origin = 1
         random_agent.action = 1

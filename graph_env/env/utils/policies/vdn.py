@@ -10,7 +10,8 @@ try:
 except ImportError:
     PettingZooEnv = None  # type: ignore
 
-class NVDNPolicy(DQNPolicy):
+
+class VDNPolicy(DQNPolicy):
     """VDN policy.
      https://arxiv.org/abs/1706.02275 restricted to one-hop neighbours only"""
 
@@ -23,13 +24,11 @@ class NVDNPolicy(DQNPolicy):
         batch_returns = torch.zeros((len(batch), ), device='cuda')
 
         for i, exp in enumerate(batch):
-            # Get ID indices of batch active obs and intersect with valid neighbours
-            active_neighbors = np.intersect1d(np.where(exp.info.indices >= 0), exp.obs.obs.observation[1]).astype(int)
-            valid_indices = exp.info.indices[active_neighbors]
+            # Get ID indices of active obs in the whole experiment
+            valid_indices = np.where(exp.info.indices >= 0)
 
             # Get active neighbour obs from batch filtering by obs index
-            neighbour_obs = batch.active_obs[[np.where(batch.active_obs.index == index)[0][0] for index in valid_indices]]
-            assert len(neighbour_obs) <= len(exp.obs.obs.observation[1])
+            neighbour_obs = batch.active_obs[np.where(np.isin(batch.active_obs.index, exp.info.indices[valid_indices]))[0]]
             q = self(neighbour_obs).logits
             q = q[np.arange(len(q)), neighbour_obs.act]
 
