@@ -1,8 +1,12 @@
 # Melissa - A Multi-Agent Reinforcement Learning Environment for Message Dissemination
- 
-The framework is written in Python and is based on PyTorch. It implements a customized extension of [Tianshou][https://github.com/thu-ml/tianshou/] and defines the MARL environment following the [PettingZoo API][https://github.com/Farama-Foundation/PettingZoo]. The GAT and global max pooling employ the implementation provided by [PyTorch Geometric][https://github.com/pyg-team/pytorch_geometric]. Training and testing graphs were generated using the [NetworkX][https://github.com/networkx/networkx] library.
+
+Melissa implements a Multi-Agent Reinforcement Learning environment for message dissemination. The environment is structured as a graph, where each node is an agent and the number of "active" agents varies as the information is disseminated. At the beginning of an episode, a source node emits a message, and agents will be considered "active" in the environment only once they have received the information. Once an agent has taken a pre-defined number of timesteps, its experience will terminate.
+Agents make decisions based only on their one-hop neighborhood features and their neighborhood behavior.
+
+While different policies can be defined, at the current state of the repository, we provide three learning algorithms based on Graph Convolutional Reinforcement Learning, namely DGN-R, L-DGN, and HL-DGN.
 
 ## Implementation Details
+The framework is written in Python and is based on PyTorch. It implements a customized extension of [Tianshou](https://github.com/thu-ml/tianshou/) and defines the MARL environment following the [PettingZoo API](https://github.com/Farama-Foundation/PettingZoo). The GAT and global max pooling employ the implementation provided by [PyTorch Geometric](https://github.com/pyg-team/pytorch_geometric). Training and testing graphs were generated using the [NetworkX](https://github.com/networkx/networkx) library.
 
 ### Framework Components
 - The main components of our framework can be found in the `graph_env/env` folder.
