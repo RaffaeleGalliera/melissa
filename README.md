@@ -1,6 +1,6 @@
 # Melissa - A Multi-Agent Reinforcement Learning Environment for Message Dissemination
  
-The framework is written in Python and is based on PyTorch. It implements a customized extension of the Tianshou framework and defines the MARL environment following the PettingZoo API. The GAT and global max pooling employ the implementation provided by PyTorch Geometric. Training and testing graphs were generated with the aid of the NetworkX library.
+The framework is written in Python and is based on PyTorch. It implements a customized extension of [Tianshou][https://github.com/thu-ml/tianshou/] and defines the MARL environment following the [PettingZoo API][https://github.com/Farama-Foundation/PettingZoo]. The GAT and global max pooling employ the implementation provided by [PyTorch Geometric][https://github.com/pyg-team/pytorch_geometric]. Training and testing graphs were generated using the [NetworkX][https://github.com/networkx/networkx] library.
 
 ## Implementation Details
 
@@ -18,20 +18,20 @@ The framework is written in Python and is based on PyTorch. It implements a cust
 
 1. Build the Docker image:
    ```bash
-   docker build -t Melissa .
+   docker build -t melissa .
 2. For machines without a GPU or Apple Mac devices (including ones employing Apple MX SoC):
     ```bash
-     docker build -t Melissa -f Dockefile.cpu .
+     docker build -t melissa -f Dockefile.cpu .
     ```
 3. Run the container:
     ```bash
-    docker run --ipc=host --gpus all -v ${PWD}:/home/devuser/dev:Z -it --rm Melissa
+    docker run --ipc=host --gpus all -v ${PWD}:/home/devuser/dev:Z -it --rm melissa
     ```
 4. (Optional) Visualization:
 
     To visualize agents in action on testing graphs, use the following command:
     ```bash
-   docker run --ipc=host --gpus all -e DISPLAY=unix$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -v ${PWD}:/home/devuser/dev:Z -it --rm Melissa
+   docker run --ipc=host --gpus all -e DISPLAY=unix$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -v ${PWD}:/home/devuser/dev:Z -it --rm melissa
     ```
     Alternatively, you can install the requirements in a Python (≥ 3.8) virtual environment:
     ```bash 
@@ -52,7 +52,7 @@ Trained models are saved in `log/algorithm_name/weights` as `model_name_last.pth
   ```
 - HL-DGN 
   ```bash 
-  python train_hl_dgn.py --model-name hL-DGN
+  python train_hl_dgn.py --model-name HL-DGN
   ```
 
 #### Seeding
@@ -86,7 +86,7 @@ python train_dgn_r.py --watch --model-name DGN-R.pth
 ### Topologies Dataset
 
 We've generated two datasets containing connected graph topologies. The first has 20 nodes per graph, and the second has 50 nodes. Training and testing sets for each dataset contain 50K and 100 graphs, respectively.  You can switch between different numbers of agents (20/50) using the `--n-agents` argument (default is 20). 
-All topologies can be download [here](https://drive.google.com/file/d/1Osnw_jqmIOjTqH6i2Zt8352J2LhE3w8O/view?usp=sharing). The compressed folder should be unzipped in the root directory of the project.
+All topologies can be downloaded [here](https://drive.google.com/file/d/1Osnw_jqmIOjTqH6i2Zt8352J2LhE3w8O/view?usp=sharing). The compressed folder should be unzipped in the root directory of the project.
 
 ### Hyperparameter Optimization
 An automated hyperparameter optimization study can be run using the `hyperparameter_optimization.py` script. The script will run a grid search over the hyperparameters defined in the `hyperparameter_optimization.py` file. The results of the study will be saved in the `hyp_studies` folder. To run the study, run a training experiment specifying the `--optimize` flag.
