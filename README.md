@@ -1,4 +1,4 @@
-# Melissa - A Multi-Agent Reinforcement Learning Environment for Message Dissemination
+# Melissa - A Multi-Agent Reinforcement Learning Environment for Information Dissemination
 
 Melissa implements a Multi-Agent Reinforcement Learning environment for message dissemination. The environment is structured as a graph, where each node is an agent and the number of "active" agents varies as the information is disseminated. At the beginning of an episode, a source node emits a message, and agents will be considered "active" in the environment only once they have received the information. Once an agent has taken a pre-defined number of timesteps, its experience will terminate.
 Agents make decisions based only on their one-hop neighborhood features and their neighborhood behavior.
