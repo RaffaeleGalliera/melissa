@@ -51,7 +51,8 @@ class MultiAgentCollector(Collector):
     def _assign_buffer(self, buffer: Optional[ReplayBuffer]) -> None:
         """Check if the buffer matches the constraint."""
         if buffer is None:
-            buffer = VectorReplayBuffer(self.env_num * self.number_of_agents, self.env_num * self.number_of_agents)
+            buffer = VectorReplayBuffer(self.env_num * self.number_of_agents,
+                                        self.env_num * self.number_of_agents)
         elif isinstance(buffer, ReplayBufferManager):
             assert buffer.buffer_num >= self.env_num
             if isinstance(buffer, CachedReplayBuffer):
@@ -73,14 +74,14 @@ class MultiAgentCollector(Collector):
         self.buffer = buffer
 
     def collect(
-        self,
-        n_step: Optional[int] = None,
-        n_episode: Optional[int] = None,
-        random: bool = False,
-        # TODO check this for fps-based render
-        render: Optional[float] = None,
-        no_grad: bool = True,
-        gym_reset_kwargs: Optional[Dict[str, Any]] = None,
+            self,
+            n_step: Optional[int] = None,
+            n_episode: Optional[int] = None,
+            random: bool = False,
+            # TODO check this for fps-based render
+            render: Optional[float] = None,
+            no_grad: bool = True,
+            gym_reset_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """ Collector resetting environments only when all agents are done.
         """
@@ -130,8 +131,10 @@ class MultiAgentCollector(Collector):
                         self._action_space[i].sample() for i in ready_env_ids
                     ]
                 except TypeError:  # envpool's action space is not for per-env
-                    act_sample = [self._action_space.sample() for _ in ready_env_ids]
-                act_sample = self.policy.map_action_inverse(act_sample)  # type: ignore
+                    act_sample = [self._action_space.sample() for _ in
+                                  ready_env_ids]
+                act_sample = self.policy.map_action_inverse(
+                    act_sample)  # type: ignore
                 self.data.update(act=act_sample)
             else:
                 if no_grad:
@@ -182,7 +185,7 @@ class MultiAgentCollector(Collector):
                     raise ValueError()
 
             can_reset = False
-            ready_to_reset = np.where(self.to_be_reset==True)[0]
+            ready_to_reset = np.where(self.to_be_reset == True)[0]
             if len(ready_to_reset) and result is not None:
                 can_reset = True
 
@@ -256,12 +259,16 @@ class MultiAgentCollector(Collector):
             if self.exps is not None:
                 self.exps.rew = self.rews[self.exps.info.env_id]
                 # Calculate buffer_ids and exps_indices in a vectorized manner
-                buffer_ids = (self.exps.info.env_id * self.number_of_agents) + self.exps.obs.agent_id.astype(int)
-                exps_indices = np.array([x.last_index + self.buffer._offset[i] for
-                                x, i in zip(self.buffer.buffers[buffer_ids],
-                                            buffer_ids)]).flatten()
+                buffer_ids = (
+                                     self.exps.info.env_id * self.number_of_agents) + self.exps.obs.agent_id.astype(
+                    int)
+                exps_indices = np.array(
+                    [x.last_index + self.buffer._offset[i] for
+                     x, i in zip(self.buffer.buffers[buffer_ids],
+                                 buffer_ids)]).flatten()
                 # Update indices for VDN
-                indices = np.full((self.env_num, self.number_of_agents), -1, dtype=np.int64)
+                indices = np.full((self.env_num, self.number_of_agents), -1,
+                                  dtype=np.int64)
                 row_indices = self.exps.info.env_id
                 col_indices = self.exps.obs.agent_id.astype(int)
                 indices[row_indices, col_indices] = exps_indices
@@ -304,7 +311,8 @@ class MultiAgentCollector(Collector):
                 envs_to_step_exps_indices = self.envs_to_step_exps.info.env_id
 
                 # Filter experiences for the stepping environments
-                self.exps = self.envs_to_step_exps[np.isin(envs_to_step_exps_indices, stepping_envs)]
+                self.exps = self.envs_to_step_exps[
+                    np.isin(envs_to_step_exps_indices, stepping_envs)]
 
                 # Remove experiences from envs_to_step_exps
                 self.envs_to_step_exps = self.envs_to_step_exps[
@@ -387,10 +395,13 @@ class MultiAgentCollector(Collector):
             )
             msg_mean, msg_std = msgs.mean(), msgs.std()
             coverage_mean, coverage_std = coverages.mean(), coverages.std()
+            # Spread factor: how "fast" a message is spread through the network
+            spread_factor = (coverages / np.sqrt(msgs))
+            spread_factor_mean = spread_factor.mean()
             master_episodes_rew_mean, master_episodes_rew_std = master_episodes_rew.mean(), master_episodes_rew.std()
         else:
-            msgs, coverages, master_episodes_rew = np.array([]), np.array([], int), np.array([], int)
-            msg_mean = msg_std = coverage_mean = coverage_std = master_episodes_rew_mean = master_episodes_rew_std =  0
+            msgs, coverages, spread_factor = np.array([]), np.array([], int), np.array([])
+            msg_mean = msg_std = coverage_mean = coverage_std = spread_factor_mean = 0
 
         return {
             "n/ep": episode_count,
@@ -409,6 +420,8 @@ class MultiAgentCollector(Collector):
             "coverage_std": coverage_std,
             "msg": msg_mean,
             "msg_std": msg_std,
+            "spread_factor": spread_factor,
+            "spread_factor_mean": spread_factor_mean,
             "master_episode_rew": master_episodes_rew_mean,
             "master_episode_rew_std": master_episodes_rew_std
         }
