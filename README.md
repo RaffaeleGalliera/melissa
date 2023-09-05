@@ -72,14 +72,14 @@ Trained models can be found in their respective subfolders of the `/log` folder.
 python train_dgn_r.py --watch --model-name DGN-R.pth
 ```
 
-- DGN-R:
-    ```bash
-    python train_dgn_r.py --watch --model-name DGN-R.pth
-    ```
-
 - L-DGN:
     ```bash
     python train_l_dgn.py --watch --model-name L-DGN.pth
+    ```
+
+- HL-DGN:
+    ```bash
+    python train_hl_dgn.py --watch --model-name HL-DGN.pth
     ```
 
 - MPR Heuristic:
@@ -92,6 +92,6 @@ python train_dgn_r.py --watch --model-name DGN-R.pth
 We've generated two datasets containing connected graph topologies. The first has 20 nodes per graph, and the second has 50 nodes. Training and testing sets for each dataset contain 50K and 100 graphs, respectively.  You can switch between different numbers of agents (20/50) using the `--n-agents` argument (default is 20). 
 All topologies can be downloaded [here](https://drive.google.com/file/d/1Osnw_jqmIOjTqH6i2Zt8352J2LhE3w8O/view?usp=sharing). The compressed folder should be unzipped in the root directory of the project.
 
-### Hyperparameter Optimization
-An automated hyperparameter optimization study can be run using the `hyperparameter_optimization.py` script. The script will run a grid search over the hyperparameters defined in the `hyperparameter_optimization.py` file. The results of the study will be saved in the `hyp_studies` folder. To run the study, run a training experiment specifying the `--optimize` flag.
+### Hyperparameter Optimization [WIP]
+To run an automated hyperparameter study with Optuna, run a training experiment specifying the `--optimize` flag. The results of the study will be saved in the `hyp_studies` folder.
 You can specify the maximum number of trials with `--trials` flag and the maximum number of epochs per trial with `--epoch` flag. 
