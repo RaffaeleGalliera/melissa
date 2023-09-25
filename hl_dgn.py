@@ -62,6 +62,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--update-per-step", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--training-num", type=int, default=40)
+    parser.add_argument("--obs-stacks", type=int, default=4)
     parser.add_argument("--test-num", type=int, default=100)
     parser.add_argument("--logdir", type=str, default="log")
     parser.add_argument("--render", type=float, default=0.)
@@ -227,8 +228,12 @@ def watch(
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
 
-    collector = MultiAgentCollector(masp_policy, env, exploration_noise=False,
-                                    number_of_agents=args.n_agents)
+    collector = MultiAgentCollector(
+        masp_policy,
+        env,
+        exploration_noise=False,
+        number_of_agents=args.n_agents
+    )
     result = collector.collect(n_episode=args.test_num)
 
     pprint.pprint(result)
@@ -264,18 +269,24 @@ def train_agent(
     train_collector = MultiAgentCollector(
         masp_policy,
         train_envs,
-        VectorReplayBuffer(args.buffer_size,
-                           len(train_envs) * len(agents),
-                           ignore_obs_next=True),
+        VectorReplayBuffer(
+            args.buffer_size,
+            len(train_envs) * len(agents),
+            stack_num=args.obs_stacks,
+            ignore_obs_next=True
+        ),
         exploration_noise=True,
         number_of_agents=len(agents)
     )
     test_collector = MultiAgentCollector(
         masp_policy,
         test_envs,
-        VectorReplayBuffer(args.buffer_size,
-                           len(test_envs) * len(agents),
-                           ignore_obs_next=True),
+        VectorReplayBuffer(
+            args.buffer_size,
+            len(test_envs) * len(agents),
+            stack_num=args.obs_stacks,
+            ignore_obs_next=True
+        ),
         exploration_noise=False,
         number_of_agents=len(agents)
     )

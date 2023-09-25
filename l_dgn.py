@@ -27,7 +27,7 @@ from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE, \
     NUMBER_OF_FEATURES
 from graph_env.env.utils.logger import CustomLogger
 
-from graph_env.env.utils.networks.l_dgn import LDGNNetwork
+from graph_env.env.utils.networks.recurrent_l_dgn import RecurrentLDGNNetwork as LDGNNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import \
     MultiAgentSharedPolicy
 
@@ -60,6 +60,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--step-per-collect", type=int, default=10)
     parser.add_argument("--update-per-step", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--obs-stacks", type=int, default=4)
     parser.add_argument("--training-num", type=int, default=20)
     parser.add_argument("--test-num", type=int, default=100)
     parser.add_argument("--logdir", type=str, default="log")
@@ -258,23 +259,28 @@ def train_agent(
 
     masp_policy, optim, agents = get_agents(args, policy=masp_policy,
                                             optim=optim)
-
     # collector
     train_collector = MultiAgentCollector(
         masp_policy,
         train_envs,
-        VectorReplayBuffer(args.buffer_size,
-                           len(train_envs) * len(agents),
-                           ignore_obs_next=True),
+        VectorReplayBuffer(
+            args.buffer_size,
+            len(train_envs) * len(agents),
+            stack_num=args.obs_stacks,
+            ignore_obs_next=True
+        ),
         exploration_noise=True,
         number_of_agents=len(agents)
     )
     test_collector = MultiAgentCollector(
         masp_policy,
         test_envs,
-        VectorReplayBuffer(args.buffer_size,
-                           len(test_envs) * len(agents),
-                           ignore_obs_next=True),
+        VectorReplayBuffer(
+            args.buffer_size,
+            len(test_envs) * len(agents),
+            stack_num=args.obs_stacks,
+            ignore_obs_next=True
+        ),
         exploration_noise=False,
         number_of_agents=len(agents)
     )
