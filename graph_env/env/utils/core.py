@@ -267,18 +267,10 @@ class World:
 
         self.graph.nodes[agent.id]['features_actor'] = [
             sum(agent.one_hop_neighbours_ids),
-            agent.messages_transmitted
+            agent.messages_transmitted,
+            agent.action if agent.action is not None else 0
         ]
 
-        self.graph.nodes[agent.id]['features_critic'] = np.concatenate(
-            (self.graph.nodes[agent.id]['features_critic'],
-             agent.actions_history)
-        )
-
-        self.graph.nodes[agent.id]['features_actor'] = np.concatenate(
-            (self.graph.nodes[agent.id]['features_actor'],
-             agent.actions_history)
-        )
 
     def update_local_graph(self, agent):
         agent.update_local_view(
