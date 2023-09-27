@@ -27,7 +27,7 @@ from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE, \
     NUMBER_OF_FEATURES
 from graph_env.env.utils.logger import CustomLogger
 
-from graph_env.env.utils.networks.recurrent_l_dgn import RecurrentLDGNNetwork as LDGNNetwork
+from graph_env.env.utils.networks.gru_l_dgn import RecurrentLDGNNetwork as LDGNNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import \
     MultiAgentSharedPolicy
 

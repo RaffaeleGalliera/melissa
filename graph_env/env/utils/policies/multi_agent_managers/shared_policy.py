@@ -41,27 +41,40 @@ class MultiAgentSharedPolicy(BasePolicy):
         results = {}
         # reward can be empty Batch (after initial reset) or nparray.
         has_rew = isinstance(buffer.rew, np.ndarray)
+        has_rnn_mask = isinstance(buffer.obs.mask, np.ndarray) and len(batch.obs.mask.shape) == 3
         if has_rew:  # save the original reward in save_rew
             # Since we do not override buffer.__setattr__, here we use _meta to
             # change buffer.rew, otherwise buffer.rew = Batch() has no effect.
             save_rew, buffer._meta.rew = buffer.rew, Batch()
+
         for agent in self.agents:
             agent_index = np.nonzero(batch.obs.agent_id == agent)[0]
             if len(agent_index) == 0:
                 results[agent] = Batch()
                 continue
+
             tmp_batch, tmp_indice = batch[agent_index], indice[agent_index]
             if has_rew:
                 tmp_batch.rew = tmp_batch.rew[:, self.agent_idx[agent]]
                 buffer._meta.rew = save_rew[:, self.agent_idx[agent]]
+
             if not hasattr(tmp_batch.obs, "mask"):
                 if hasattr(tmp_batch.obs, 'obs'):
                     tmp_batch.obs = tmp_batch.obs.obs
                 if hasattr(tmp_batch.obs_next, 'obs'):
                     tmp_batch.obs_next = tmp_batch.obs_next.obs
-            results[agent] = self.policy.process_fn(tmp_batch, buffer, tmp_indice)
+
+            if has_rnn_mask:  # We need to handle masks in form [buffer_size, stack]
+                # at the moment masking is disabled
+                save_mask = buffer.obs.pop('mask')
+                results[agent] = self.policy.process_fn(tmp_batch, buffer, tmp_indice)
+                buffer.obs.mask = save_mask
+            else:
+                results[agent] = self.policy.process_fn(tmp_batch, buffer, tmp_indice)
+
         if has_rew:  # restore from save_rew
             buffer._meta.rew = save_rew
+
         return Batch(results)
 
     def exploration_noise(self, act: Union[np.ndarray, Batch],
@@ -130,9 +143,11 @@ class MultiAgentSharedPolicy(BasePolicy):
                     tmp_batch.obs = tmp_batch.obs.obs
                 if hasattr(tmp_batch.obs_next, 'obs'):
                     tmp_batch.obs_next = tmp_batch.obs_next.obs
+            if len(tmp_batch.obs['mask'].shape) == 3:
+                tmp_batch.obs['mask'] = tmp_batch.obs['mask'][:, -1]
             out = self.policy(
                 batch=tmp_batch,
-                state=None if state is None else state[agent_id],
+                state=None if state is None else state[agent_index],
                 **kwargs
             )
             act = out.act
@@ -143,19 +158,22 @@ class MultiAgentSharedPolicy(BasePolicy):
         holder = Batch.cat(
             [
                 {
-                    "act": act
+                    "act": act,
+                    "state": each_state
                 } for (has_data, agent_index, out, act, each_state) in results
                 if has_data
             ]
         )
         state_dict, out_dict = {}, {}
+        # Set actions based on the original "agent_index" value
         for agent_id, (has_data, agent_index, out, act, state) in zip(self.agents, results):
             if has_data:
                 holder.act[agent_index] = act
+                holder.state[agent_index] = state
             state_dict[agent_id] = state
             out_dict[agent_id] = out
         holder["out"] = out_dict
-        holder["state"] = state_dict
+        holder["state_dict"] = state_dict
         return holder
 
     def learn(self, batch: Batch, batch_size: int = None, repeat: int = None,
@@ -164,6 +182,10 @@ class MultiAgentSharedPolicy(BasePolicy):
 
         :return: policy loss
         """
+        # Disable action masking at the moment
+        for key in batch.keys():
+            batch[key].obs.pop('mask', None) if not batch[key].is_empty() else None
+
         if batch_size and repeat:
             results = self.policy.learn(Batch.cat([batch[agent_id] for agent_id in self.agents if not batch[agent_id].is_empty()]), batch_size, repeat)
         else:

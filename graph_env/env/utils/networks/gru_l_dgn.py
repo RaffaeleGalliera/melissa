@@ -64,9 +64,9 @@ class RecurrentLDGNNetwork(nn.Module):
                                device=self.device)
         self.conv2 = GATv2Conv(hidden_dim * num_heads, hidden_dim, num_heads,
                                device=self.device)
-        self.lstm = nn.LSTM(
-            input_size=1152,
-            hidden_size=1152,
+        self.gru = nn.GRU(
+            input_size=hidden_dim + hidden_dim * num_heads * 2,
+            hidden_size=hidden_dim + hidden_dim * num_heads * 2,
             num_layers=1,
             batch_first=True,
         )
@@ -112,19 +112,18 @@ class RecurrentLDGNNetwork(nn.Module):
         # Regroup the data into (bsz, 4, 7)
         x = torch.cat([x_1, x_2, x_3], dim=1)
         x = x.reshape(bsz, horizon, 1152)
-        self.lstm.flatten_parameters()
+        self.gru.flatten_parameters()
         if state is None or state.is_empty():
-            x, (hidden, cell) = self.lstm(x)
+            x, hidden = self.gru(x)
         else:
-            x, (hidden, cell) = self.lstm(
+            # TODO understand why tensor.contiguos() doesn't work
+            x, hidden = self.gru(
                 x, (
-                    state["hidden"].transpose(0, 1).contiguos(),
-                    state["cell"].transpose(0, 1).contiguos()
+                    state["hidden"].transpose(0, 1)
                 )
             )
         q, v = self.Q(x[:, -1]), self.V(x[:, -1])
         x = q - q.mean(dim=1, keepdim=True) + v
         return x, {
-            "hidden": hidden.transpose(0, 1).detach(),
-            "cell": cell.transpose(0, 1).detach()
+            "hidden": hidden.transpose(0, 1).detach()
         }
