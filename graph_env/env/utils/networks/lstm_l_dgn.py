@@ -118,8 +118,8 @@ class RecurrentLDGNNetwork(nn.Module):
         else:
             x, (hidden, cell) = self.lstm(
                 x, (
-                    state["hidden"].transpose(0, 1).contiguos(),
-                    state["cell"].transpose(0, 1).contiguos()
+                    state["hidden"].transpose(0, 1),
+                    state["cell"].transpose(0, 1)
                 )
             )
         q, v = self.Q(x[:, -1]), self.V(x[:, -1])
