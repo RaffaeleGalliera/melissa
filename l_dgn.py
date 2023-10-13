@@ -27,7 +27,8 @@ from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE, \
     NUMBER_OF_FEATURES
 from graph_env.env.utils.logger import CustomLogger
 
-from graph_env.env.utils.networks.gru_l_dgn import RecurrentLDGNNetwork as LDGNNetwork
+from graph_env.env.utils.networks.gru_l_dgn import \
+    RecurrentLDGNNetwork as LDGNNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import \
     MultiAgentSharedPolicy
 
@@ -146,7 +147,7 @@ def get_env(
         dynamic_graph=False
 ):
     env = graph_env_v0.env(graph=graph,
-                           render_mode=render_mode,
+                           render_mode='human',
                            number_of_agents=number_of_agents,
                            radius=radius,
                            is_scripted=is_scripted,
@@ -245,10 +246,13 @@ def train_agent(
         opt_trial: optuna.Trial = None
 ) -> Tuple[dict, BasePolicy]:
     train_envs = SubprocVectorEnv(
-        [lambda: get_env(number_of_agents=args.n_agents) for i in
+        [lambda: get_env(number_of_agents=args.n_agents,
+                         dynamic_graph=args.dynamic_graph) for i in
          range(args.training_num)])
+
     test_envs = SubprocVectorEnv(
         [lambda: get_env(number_of_agents=args.n_agents,
+                         dynamic_graph=args.dynamic_graph,
                          is_testing=True)])
 
     # seed
@@ -313,7 +317,7 @@ def train_agent(
     def train_fn(epoch, env_step):
         decay_factor = (1 - pow(e, (
                 log(args.eps_train_final) / (
-                    args.exploration_fraction * args.epoch * args.step_per_epoch))))
+                args.exploration_fraction * args.epoch * args.step_per_epoch))))
         eps = max(args.eps_train * (1 - decay_factor) ** env_step,
                   args.eps_train_final)
         masp_policy.policy.set_eps(eps)

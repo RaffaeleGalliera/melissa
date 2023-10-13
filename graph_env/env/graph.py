@@ -338,6 +338,9 @@ class GraphEnv(AECEnv):
         two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
         assert (set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
 
+        if len(one_hop_neighbor_indices) == 0:
+            return 0 if agent.action else 1
+
         reward = agent.two_hop_cover / len(two_hop_neighbor_indices)
         if sum(agent.state.transmitted_to):
             penalty_1 = sum([self.world.agents[index].messages_transmitted for index in one_hop_neighbor_indices]) / len(one_hop_neighbor_indices)
