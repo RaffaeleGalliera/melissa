@@ -147,7 +147,7 @@ def get_env(
         dynamic_graph=False
 ):
     env = graph_env_v0.env(graph=graph,
-                           render_mode='human',
+                           render_mode=render_mode,
                            number_of_agents=number_of_agents,
                            radius=radius,
                            is_scripted=is_scripted,
