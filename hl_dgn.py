@@ -250,10 +250,13 @@ def train_agent(
         opt_trial: optuna.Trial = None
 ) -> Tuple[dict, BasePolicy]:
     train_envs = SubprocVectorEnv(
-        [lambda: get_env(number_of_agents=args.n_agents) for i in
+        [lambda: get_env(number_of_agents=args.n_agents,
+                         dynamic_graph=args.dynamic_graph) for i in
          range(args.training_num)])
+
     test_envs = SubprocVectorEnv(
         [lambda: get_env(number_of_agents=args.n_agents,
+                         dynamic_graph=args.dynamic_graph,
                          is_testing=True)])
 
     # seed
