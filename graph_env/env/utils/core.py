@@ -225,9 +225,9 @@ class World:
             # Memory-less MPR heuristics
             if agent.state.has_taken_action:
                 agent.action = 0
-            elif agent.has_received_from_relayed_node() or agent.state.message_origin:
+            elif sum(agent.state.received_from) or agent.state.message_origin:
                 agent.state.has_taken_action = 1
-                if not sum(agent.state.transmitted_to):
+                if agent.has_received_from_relayed_node() or agent.state.message_origin:
                     agent.action = 1
                 else:
                     agent.action = 0
