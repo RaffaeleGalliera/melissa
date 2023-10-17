@@ -223,14 +223,15 @@ class World:
 
         for agent in self.scripted_agents:
             # Memory-less MPR heuristics
-            if agent.state.has_taken_action:
-                agent.action = 0
-            elif sum(agent.state.received_from) or agent.state.message_origin:
-                agent.state.has_taken_action = 1
+            agent.action = 0
+
+            # Check if the agent has taken an action or received a message
+            if not agent.state.has_taken_action and (
+                    sum(agent.state.received_from) or agent.state.message_origin):
+                # Check the specific conditions to update the action to 1
                 if agent.has_received_from_relayed_node() or agent.state.message_origin:
                     agent.action = 1
-                else:
-                    agent.action = 0
+                agent.state.has_taken_action = 1
 
         # Send message
         for agent in self.agents:
