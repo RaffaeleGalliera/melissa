@@ -222,7 +222,10 @@ class World:
                 self.agents[index].state.relays_for[agent.id] = 1
 
         for agent in self.scripted_agents:
-            if (agent.has_received_from_relayed_node() or agent.state.message_origin) and not agent.state.has_taken_action:
+            # Memory-less MPR heuristics
+            if agent.state.has_taken_action:
+                agent.action = 0
+            elif agent.has_received_from_relayed_node() or agent.state.message_origin:
                 agent.state.has_taken_action = 1
                 if not sum(agent.state.transmitted_to):
                     agent.action = 1
