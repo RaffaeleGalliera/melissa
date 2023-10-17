@@ -86,6 +86,8 @@ class State:
         self.relays_for = None
         self.relayed_by = None
         self.message_origin = 0
+        # Used for memory-less MPR heuristic
+        self.has_taken_action = 0
 
     def reset(self, num_agents):
         self.received_from = np.zeros(num_agents)
@@ -220,12 +222,12 @@ class World:
                 self.agents[index].state.relays_for[agent.id] = 1
 
         for agent in self.scripted_agents:
-            if (agent.has_received_from_relayed_node()
-                or agent.state.message_origin) \
-                    and not sum(agent.state.transmitted_to):
-                agent.action = 1
-            else:
-                agent.action = 0
+            if (agent.has_received_from_relayed_node() or agent.state.message_origin) and not agent.state.has_taken_action:
+                agent.state.has_taken_action = 1
+                if not sum(agent.state.transmitted_to):
+                    agent.action = 1
+                else:
+                    agent.action = 0
 
         # Send message
         for agent in self.agents:
@@ -244,6 +246,10 @@ class World:
         # Local graph of every agent is updated
         for agent in self.agents:
             self.update_local_graph(agent)
+
+        # Reset MPR Policies
+        for agent in self.scripted_agents:
+            agent.state.relays_for = np.zeros(self.num_agents)
 
     def update_agent_state(self, agent):
         # If it has received from a relay node or is message origin
