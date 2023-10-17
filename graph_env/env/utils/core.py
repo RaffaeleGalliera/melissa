@@ -222,7 +222,6 @@ class World:
                 self.agents[index].state.relays_for[agent.id] = 1
 
         for agent in self.scripted_agents:
-            # Memory-less MPR heuristics
             agent.action = 0
 
             # Check if the agent has taken an action or received a message
