@@ -26,10 +26,10 @@ from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE, \
     NUMBER_OF_FEATURES
 from graph_env.env.utils.logger import CustomLogger
 
-from graph_env.env.utils.networks.dgn_r import DGNRNetwork
-from graph_env.env.utils.policies.dgn import DGNPolicy
-from graph_env.env.utils.policies.multi_agent_managers.collaborative_shared_policy import \
-    MultiAgentCollaborativeSharedPolicy
+from graph_env.env.utils.networks.gru_l_dgn import \
+    RecurrentLDGNNetwork as LDGNNetwork
+from graph_env.env.utils.policies.multi_agent_managers.collaborative_shared_policy import MultiAgentCollaborativeSharedPolicy as MultiAgentSharedPolicy
+from graph_env.env.utils.policies.dgn import DGNPolicy as DQNPolicy
 
 from graph_env.env.utils.collectors.collector import MultiAgentCollector
 from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
@@ -51,7 +51,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--buffer-size", type=int, default=100000)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--n-step", type=int, default=1)
+    parser.add_argument("--n-step", type=int, default=4)
     parser.add_argument("--hidden-emb", type=int, default=128)
     parser.add_argument("--num-heads", type=int, default=4)
     parser.add_argument("--target-update-freq", type=int, default=500)
@@ -60,7 +60,8 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--step-per-collect", type=int, default=10)
     parser.add_argument("--update-per-step", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--training-num", type=int, default=40)
+    parser.add_argument("--obs-stacks", type=int, default=4)
+    parser.add_argument("--training-num", type=int, default=20)
     parser.add_argument("--test-num", type=int, default=100)
     parser.add_argument("--logdir", type=str, default="log")
     parser.add_argument("--render", type=float, default=0.)
@@ -131,7 +132,7 @@ def get_parser() -> argparse.ArgumentParser:
 
 def get_args() -> argparse.Namespace:
     parser = get_parser().parse_known_args()[0]
-    parser.learning_algorithm = "dgn_r"
+    parser.learning_algorithm = "dgn"
     return parser
 
 
@@ -180,7 +181,7 @@ def get_agents(
         elif args.aggregator_function == "global_add_pool":
             aggregator = global_add_pool
 
-        net = DGNRNetwork(
+        net = LDGNNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
@@ -194,7 +195,7 @@ def get_agents(
             net.parameters(), lr=args.lr
         )
 
-        policy = DGNPolicy(
+        policy = DQNPolicy(
             net,
             optim,
             args.gamma,
@@ -202,7 +203,7 @@ def get_agents(
             target_update_freq=args.target_update_freq
         ).to(args.device)
 
-    masp_policy = MultiAgentCollaborativeSharedPolicy(policy, env)
+    masp_policy = MultiAgentSharedPolicy(policy, env)
 
     return masp_policy, optim, env.agents
 
@@ -211,7 +212,7 @@ def watch(
         args: argparse.Namespace = get_args(),
         masp_policy: BasePolicy = None,
 ) -> None:
-    weights_path = os.path.join(args.logdir, "mpr", "dgn_r", "weights",
+    weights_path = os.path.join(args.logdir, "mpr", "l_dgn", "weights",
                                 f"{args.model_name}")
 
     env = DummyVectorEnv([lambda: get_env(number_of_agents=args.n_agents,
@@ -244,10 +245,13 @@ def train_agent(
         opt_trial: optuna.Trial = None
 ) -> Tuple[dict, BasePolicy]:
     train_envs = SubprocVectorEnv(
-        [lambda: get_env(number_of_agents=args.n_agents) for i in
+        [lambda: get_env(number_of_agents=args.n_agents,
+                         dynamic_graph=args.dynamic_graph) for i in
          range(args.training_num)])
+
     test_envs = SubprocVectorEnv(
         [lambda: get_env(number_of_agents=args.n_agents,
+                         dynamic_graph=args.dynamic_graph,
                          is_testing=True)])
 
     # seed
@@ -258,23 +262,28 @@ def train_agent(
 
     masp_policy, optim, agents = get_agents(args, policy=masp_policy,
                                             optim=optim)
-
     # collector
     train_collector = MultiAgentCollector(
         masp_policy,
         train_envs,
-        VectorReplayBuffer(args.buffer_size,
-                           len(train_envs) * len(agents),
-                           ignore_obs_next=True),
+        VectorReplayBuffer(
+            args.buffer_size,
+            len(train_envs) * len(agents),
+            stack_num=args.obs_stacks,
+            ignore_obs_next=True
+        ),
         exploration_noise=True,
         number_of_agents=len(agents)
     )
     test_collector = MultiAgentCollector(
         masp_policy,
         test_envs,
-        VectorReplayBuffer(args.buffer_size,
-                           len(test_envs) * len(agents),
-                           ignore_obs_next=True),
+        VectorReplayBuffer(
+            args.buffer_size,
+            len(test_envs) * len(agents),
+            stack_num=args.obs_stacks,
+            ignore_obs_next=True
+        ),
         exploration_noise=False,
         number_of_agents=len(agents)
     )
@@ -282,12 +291,12 @@ def train_agent(
 
     if not args.optimize:
         # log
-        log_path = os.path.join(args.logdir, 'mpr', 'dgn')
+        log_path = os.path.join(args.logdir, 'mpr', 'l_dgn')
         logger = CustomLogger(project='dancing_bees', name=args.model_name)
         writer = SummaryWriter(log_path)
         writer.add_text("args", str(args))
         logger.load(writer)
-    weights_path = os.path.join(args.logdir, "mpr", "dgn_r", "weights")
+    weights_path = os.path.join(args.logdir, "mpr", "l_dgn", "weights")
     Path(weights_path).mkdir(parents=True, exist_ok=True)
 
     def save_best_fn(pol):
@@ -307,7 +316,7 @@ def train_agent(
     def train_fn(epoch, env_step):
         decay_factor = (1 - pow(e, (
                 log(args.eps_train_final) / (
-                    args.exploration_fraction * args.epoch * args.step_per_epoch))))
+                args.exploration_fraction * args.epoch * args.step_per_epoch))))
         eps = max(args.eps_train * (1 - decay_factor) ** env_step,
                   args.eps_train_final)
         masp_policy.policy.set_eps(eps)
@@ -384,7 +393,7 @@ def load_policy(path, args, env):
         q_param = {"hidden_sizes": args.dueling_q_hidden_sizes}
         v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
 
-        net = DGNRNetwork(
+        net = LDGNNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
@@ -397,7 +406,7 @@ def load_policy(path, args, env):
             net.parameters(), lr=args.lr
         )
 
-        policy = DGNPolicy(
+        policy = DQNPolicy(
             net,
             optim,
             args.gamma,
