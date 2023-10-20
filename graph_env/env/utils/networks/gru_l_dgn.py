@@ -58,7 +58,7 @@ class RecurrentLDGNNetwork(nn.Module):
         self.hidden_dim = hidden_dim
         self.use_dueling = dueling_param is not None
         output_dim = output_dim if not self.use_dueling else 0
-        self.encoder = MLP(input_dim=input_dim, hidden_sizes=[512],
+        self.encoder = MLP(input_dim=input_dim, hidden_sizes=[hidden_dim],
                            output_dim=hidden_dim, device=self.device)
         self.conv1 = GATv2Conv(hidden_dim, hidden_dim, num_heads,
                                device=self.device)
