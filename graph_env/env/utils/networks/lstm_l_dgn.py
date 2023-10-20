@@ -56,6 +56,7 @@ class RecurrentLDGNNetwork(nn.Module):
         self.device = device
         self.output_dim = hidden_dim * num_heads
         self.hidden_dim = hidden_dim
+        self.final_latent_dim = hidden_dim + hidden_dim * num_heads * 2
         self.use_dueling = dueling_param is not None
         output_dim = output_dim if not self.use_dueling else 0
         self.encoder = MLP(input_dim=input_dim, hidden_sizes=[hidden_dim],
@@ -65,8 +66,8 @@ class RecurrentLDGNNetwork(nn.Module):
         self.conv2 = GATv2Conv(hidden_dim * num_heads, hidden_dim, num_heads,
                                device=self.device)
         self.lstm = nn.LSTM(
-            input_size=hidden_dim + hidden_dim * num_heads * 2,
-            hidden_size=hidden_dim + hidden_dim * num_heads * 2,
+            input_size=self.final_latent_dim,
+            hidden_size=self.final_latent_dim,
             num_layers=1,
             batch_first=True,
         )
@@ -77,13 +78,13 @@ class RecurrentLDGNNetwork(nn.Module):
 
             q_kwargs: Dict[str, Any] = {
                 **q_kwargs,
-                "input_dim": hidden_dim + hidden_dim * num_heads * 2,
+                "input_dim": self.final_latent_dim,
                 "output_dim": q_output_dim,
                 "device": self.device
             }
             v_kwargs: Dict[str, Any] = {
                 **v_kwargs,
-                "input_dim": hidden_dim + hidden_dim * num_heads * 2,
+                "input_dim": self.final_latent_dim,
                 "output_dim": v_output_dim,
                 "device": self.device
             }
@@ -111,7 +112,7 @@ class RecurrentLDGNNetwork(nn.Module):
         # I need (bsz, 4, 7)
         # Regroup the data into (bsz, 4, 7)
         x = torch.cat([x_1, x_2, x_3], dim=1)
-        x = x.reshape(bsz, horizon, 1152)
+        x = x.reshape(bsz, horizon, self.final_latent_dim)
         self.lstm.flatten_parameters()
         if state is None or state.is_empty():
             x, (hidden, cell) = self.lstm(x)
