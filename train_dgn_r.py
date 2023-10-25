@@ -1,8 +1,9 @@
 import os
 import pprint
 
-from dgn_r import get_args, train_agent, watch
+from dgn_r import get_args, train_agent, watch, get_env
 from graph_env.env.utils.optimizer import hyperparams_opt
+from graph_env.env.utils.hyp_optimizer.params_set import dgn_r_params_set
 
 
 # @pytest.mark.skip(reason="runtime too long and unstable result")
@@ -12,7 +13,7 @@ def test_mpr(args=get_args()):
         return
 
     if args.optimize:
-        hyperparams_opt()
+        hyperparams_opt(get_args, train_agent, get_env, dgn_r_params_set)
         return
 
     result, masp_policy = train_agent(args)

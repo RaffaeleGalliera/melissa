@@ -12,40 +12,38 @@ from optuna.trial import TrialState
 from optuna.visualization import plot_optimization_history, plot_param_importances
 from tianshou.env import DummyVectorEnv
 from graph_env.env.utils.collectors.collector import MultiAgentCollector
-from l_dgn import get_args, train_agent, get_env
 from plotly.graph_objects import Figure
 
 logging.getLogger().setLevel(logging.INFO)
 
 
-def dqn_params_set(trial, args):
-    # Here hyperparameters are suggested to the framework
-    args.lr = trial.suggest_float("learning_rate", 1e-5, 1, log=True)  # def 0.001
-    args.gamma = trial.suggest_categorical("gamma", [0.9, 0.95, 0.98, 0.99, 0.995, 0.999, 0.9999])  # def 0.99
-    args.buffer_size = trial.suggest_categorical("buffer_size", [int(5e4), int(1e5), int(5e5), int(1e6)])  # def 1e5
-    args.hidden_emb = trial.suggest_categorical("hidden_emb", [16, 32, 64, 128, 256, 512])  # def 128
-    args.num_heads = trial.suggest_categorical("num_heads", [2, 4, 6])  # def 4
-    args.batch_size = trial.suggest_categorical("batch_size", [16, 32, 64, 128, 256, 512])  # def 32
-    args.eps_train_final = trial.suggest_uniform("eps_train_final", 0, 0.2)  # def 0.05
-    args.exploration_fraction = trial.suggest_uniform("exploration_fraction", 0.5, 0.8)  # def 0.6
-    args.update_per_step = trial.suggest_categorical("update_per_step", [0.1, 0.5, 1])  # def 0.1
-    args.step_per_collect = trial.suggest_categorical("step_per_collect", [10, 50, 100])  # def 10
-    args.target_update_freq = trial.suggest_categorical("target_update_freq", [100, 500, 1000, 5000])  # def 500
-    args.aggregator_function = trial.suggest_categorical("aggregator_function",
-                                                         ["global_max_pool", "global_add_pool", "global_mean_pool"])
-    # def "global_max_pool"
+# This class allows every function in this scope to access algorithm-specific information
+class TargetAlgorithm:
+    def __init__(self):
+        self.get_args = None
+        self.train_agent = None
+        self.get_env = None
+        self.params_set = None
+
+    def set(self, get_args, train_agent, get_env, params_set):
+        self.get_args = get_args
+        self.train_agent = train_agent
+        self.get_env = get_env
+        self.params_set = params_set
+
+
+target_algorithm = TargetAlgorithm()
 
 
 def objective(trial: optuna.Trial):
     # Get args, where hyperparams are defined and let optuna change them
-    args = get_args()
+    args = target_algorithm.get_args()
 
     # It is possible to create different hyperparams set for different algorithms or for the same one
-    if args.learning_algorithm == "dqn":
-        dqn_params_set(trial, args)
+    target_algorithm.params_set(trial, args)
 
     # Agents are trained
-    train_result, masp_policy = train_agent(args, opt_trial=trial)
+    train_result, masp_policy = target_algorithm.train_agent(args, opt_trial=trial)
 
     # Agents are tested
     test_result = test_agent(args, masp_policy)
@@ -63,7 +61,7 @@ def objective(trial: optuna.Trial):
 
 def test_agent(args, masp_policy):
     # Testing environment are extracted
-    env = DummyVectorEnv([lambda: get_env(number_of_agents=args.n_agents,
+    env = DummyVectorEnv([lambda: target_algorithm.get_env(number_of_agents=args.n_agents,
                                           is_testing=True,
                                           render_mode=None,
                                           dynamic_graph=args.dynamic_graph)])
@@ -105,8 +103,11 @@ def create_pruner(args) -> BasePruner:
     return pruner
 
 
-def hyperparams_opt():
-    args = get_args()
+def hyperparams_opt(get_args, train_agent, get_env, params_set):
+
+    # Algorithm-specific arguments, train_function, environment and set of hyperparameters are set
+    target_algorithm.set(get_args, train_agent, get_env, params_set)
+    args = target_algorithm.get_args()
 
     # Set number of torch threads
     torch.set_num_threads(1)
