@@ -27,7 +27,7 @@ from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE, \
     NUMBER_OF_FEATURES
 from graph_env.env.utils.logger import CustomLogger
 
-from graph_env.env.utils.networks.gru_l_dgn import \
+from graph_env.env.utils.networks.lstm_l_dgn import \
     RecurrentLDGNNetwork as LDGNNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import \
     MultiAgentSharedPolicy
@@ -80,7 +80,7 @@ def get_parser() -> argparse.ArgumentParser:
                         action="store_true",
                         default=False,
                         help="Use MPR policy")
-    parser.add_argument('--n-agents', type=int, choices=[20, 50], default=20)
+    parser.add_argument('--n-agents', type=int, choices=[20, 50, 100], default=20)
     parser.add_argument(
         "--watch",
         default=False,

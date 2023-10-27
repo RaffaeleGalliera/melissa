@@ -48,7 +48,7 @@ class MultiAgentSharedPolicy(BasePolicy):
             save_rew, buffer._meta.rew = buffer.rew, Batch()
 
         for agent in self.agents:
-            agent_index = np.nonzero(batch.obs.agent_id == agent)[0]
+            agent_index = np.unique(np.nonzero(batch.obs.agent_id == agent)[0])
             if len(agent_index) == 0:
                 results[agent] = Batch()
                 continue
