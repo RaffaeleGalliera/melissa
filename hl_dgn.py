@@ -229,7 +229,7 @@ def watch(
 
     collector = MultiAgentCollector(masp_policy, env, exploration_noise=False,
                                     number_of_agents=args.n_agents)
-    result = collector.collect(n_episode=args.test_num)
+    result = collector.collect(n_episode= args.test_num * args.n_agents)
 
     pprint.pprint(result)
     rews, lens = result["rews"], result["lens"]
@@ -331,7 +331,7 @@ def train_agent(
             max_epoch=args.epoch,
             step_per_epoch=args.step_per_epoch,
             step_per_collect=args.step_per_collect,
-            episode_per_test=args.test_num,
+            episode_per_test=args.test_num * args.n_agents,
             batch_size=args.batch_size,
             train_fn=train_fn,
             test_fn=test_fn,
@@ -352,7 +352,7 @@ def train_agent(
             max_epoch=args.epoch,
             step_per_epoch=args.step_per_epoch,
             step_per_collect=args.step_per_collect,
-            episode_per_test=args.test_num,
+            episode_per_test=args.test_num * args.n_agents,
             batch_size=args.batch_size,
             train_fn=train_fn,
             test_fn=test_fn,
