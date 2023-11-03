@@ -13,7 +13,7 @@ import optuna
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from tianshou.data import VectorReplayBuffer
+from tianshou.data import VectorReplayBuffer, PrioritizedVectorReplayBuffer
 from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
 from tianshou.policy import BasePolicy, DQNPolicy
@@ -119,6 +119,9 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-startup-trials", type=int, default=2)
     parser.add_argument("--n-warmup-steps", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=None)
+
+    parser.add_argument("--alpha", type=float, default=0.6)
+    parser.add_argument("--beta", type=float, default=0.4)
 
     parser.add_argument(
         "--save-study",
@@ -229,7 +232,7 @@ def watch(
 
     collector = MultiAgentCollector(masp_policy, env, exploration_noise=False,
                                     number_of_agents=args.n_agents)
-    result = collector.collect(n_episode= args.test_num * args.n_agents)
+    result = collector.collect(n_episode=args.test_num * args.n_agents)
 
     pprint.pprint(result)
     rews, lens = result["rews"], result["lens"]
@@ -264,9 +267,11 @@ def train_agent(
     train_collector = MultiAgentCollector(
         masp_policy,
         train_envs,
-        VectorReplayBuffer(args.buffer_size,
-                           len(train_envs) * len(agents),
-                           ignore_obs_next=True),
+        PrioritizedVectorReplayBuffer(args.buffer_size,
+                                      len(train_envs) * len(agents),
+                                      ignore_obs_next=True,
+                                      alpha=args.alpha,
+                                      beta=args.beta),
         exploration_noise=True,
         number_of_agents=len(agents)
     )
@@ -274,8 +279,8 @@ def train_agent(
         masp_policy,
         test_envs,
         VectorReplayBuffer(args.buffer_size,
-                           len(test_envs) * len(agents),
-                           ignore_obs_next=True),
+                                      len(test_envs) * len(agents),
+                                      ignore_obs_next=True),
         exploration_noise=False,
         number_of_agents=len(agents)
     )
