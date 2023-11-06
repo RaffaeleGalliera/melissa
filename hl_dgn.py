@@ -100,6 +100,13 @@ def get_parser() -> argparse.ArgumentParser:
         help="Enable dynamic graphs"
     )
 
+    parser.add_argument(
+        "--prio-buffer",
+        default=False,
+        action="store_true",
+        help="Enable prioritized experience replay"
+    )
+
     parser.add_argument("--save-buffer-name", type=str, default=None)
     parser.add_argument("--model-name", type=str,
                         default=datetime.datetime.now().strftime(
@@ -263,15 +270,20 @@ def train_agent(
     masp_policy, optim, agents = get_agents(args, policy=masp_policy,
                                             optim=optim)
 
+    train_replay_buffer = PrioritizedVectorReplayBuffer(args.buffer_size,
+                                                        len(train_envs) * len(agents),
+                                                        ignore_obs_next=True,
+                                                        alpha=args.alpha,
+                                                        beta=args.beta) if args.prio_buffer else \
+                          VectorReplayBuffer(args.buffer_size,
+                                             len(train_envs) * len(agents),
+                                             ignore_obs_next=True)
+
     # collector
     train_collector = MultiAgentCollector(
         masp_policy,
         train_envs,
-        PrioritizedVectorReplayBuffer(args.buffer_size,
-                                      len(train_envs) * len(agents),
-                                      ignore_obs_next=True,
-                                      alpha=args.alpha,
-                                      beta=args.beta),
+        train_replay_buffer,
         exploration_noise=True,
         number_of_agents=len(agents)
     )
