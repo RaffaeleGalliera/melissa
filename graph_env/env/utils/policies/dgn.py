@@ -25,7 +25,6 @@ class DGNPolicy(DQNPolicy):
             valid_indices = exp.info.indices[np.where(exp.info.indices >= 0)].astype(int)
 
             # Get active neighbour obs from batch filtering by obs index
-            # Get active neighbour obs from batch filtering by obs index
             neighbour_obs = batch.active_obs[[np.where(batch.active_obs.index == index)[0][0] for index in valid_indices]]
             q = self(neighbour_obs).logits
             q = q[np.arange(len(q)), neighbour_obs.act]

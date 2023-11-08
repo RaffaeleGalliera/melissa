@@ -48,6 +48,7 @@ class MultiAgentSharedPolicy(BasePolicy):
             save_rew, buffer._meta.rew = buffer.rew, Batch()
 
         for agent in self.agents:
+            # Need to be unique in case of stacked obs
             agent_index = np.unique(np.nonzero(batch.obs.agent_id == agent)[0])
             if len(agent_index) == 0:
                 results[agent] = Batch()
@@ -129,7 +130,9 @@ class MultiAgentSharedPolicy(BasePolicy):
             # agent_index for agent 1 is [0, 2, 4]
             # agent_index for agent 2 is [1, 3, 5]
             # we separate the transition of each agent according to agent_id
-            agent_index = np.nonzero(batch.obs.agent_id == agent_id)[0]
+
+            # Need to be unique in case of stacked obs
+            agent_index = np.unique(np.nonzero(batch.obs.agent_id == agent_id)[0])
             if len(agent_index) == 0:
                 # (has_data, agent_index, out, act, state)
                 results.append((False, np.array([-1]), Batch(), Batch(), Batch()))
