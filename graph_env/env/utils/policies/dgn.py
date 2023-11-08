@@ -18,7 +18,9 @@ class DGNPolicy(DQNPolicy):
             self.sync_weight()
         self.optim.zero_grad()
         weight = batch.pop("weight", 1.0)
-        partial_loss = torch.zeros((len(batch), ), device='cuda')
+        device = 'cuda' if torch.cuda.is_available() else None
+        partial_loss = torch.zeros((len(batch), ), device=device)
+        td_error = torch.zeros((len(batch), ), device=device)
 
         for i, exp in enumerate(batch):
             # Get ID indices of active obs in the whole experiment
@@ -31,11 +33,12 @@ class DGNPolicy(DQNPolicy):
             q = q[np.arange(len(q)), neighbour_obs.act]
 
             returns = to_torch_as(neighbour_obs.rew.flatten(), q)
-            partial_loss[i] = ((returns - q).pow(2) * weight).mean()
+            partial_loss[i] = ((returns - q).pow(2)).mean()
+            td_error[i] = (returns - q).mean()
 
-        loss = partial_loss.mean()
+        loss = (partial_loss * weight).mean()
 
-        batch.weight = 1 # prio-buffer TODO: not handling prio-buffer yet
+        batch.weight = td_error # prio-buffer
         loss.backward()
         self.optim.step()
         self._iter += 1
