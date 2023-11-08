@@ -20,8 +20,9 @@ class VDNPolicy(DQNPolicy):
             self.sync_weight()
         self.optim.zero_grad()
         weight = batch.pop("weight", 1.0)
-        batch_q = torch.zeros((len(batch), ), device='cuda')
-        batch_returns = torch.zeros((len(batch), ), device='cuda')
+        device = 'cuda' if torch.cuda.is_available() else None
+        batch_q = torch.zeros((len(batch), ), device=device)
+        batch_returns = torch.zeros((len(batch), ), device=device)
 
         for i, exp in enumerate(batch):
             # Need to handle graph stacking case

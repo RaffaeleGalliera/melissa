@@ -72,13 +72,6 @@ def mpr_heuristic(one_hop_neighbours_ids,
     return mpr
 
 
-# Static method that calculate random movement for the agents if the graph is dynamic
-def compute_random_movement(num_agents, step):
-    ox = [step * np.random.uniform(-1, 1) for _ in range(num_agents)]
-    oy = [step * np.random.uniform(-1, 1) for _ in range(num_agents)]
-    return ox, oy
-
-
 class State:
     def __init__(self):
         self.received_from = None
@@ -195,6 +188,7 @@ class World:
             self.graphs = cycle(glob.glob(f"graph_topologies/testing_{self.num_agents}/*"))
         else:
             self.graphs = glob.glob(f"graph_topologies/training_{self.num_agents}/*")
+        self.tested_agent = 0
         self.reset()
 
     # return all agents controllable by external policies
@@ -307,7 +301,7 @@ class World:
         pos = nx.get_node_attributes(self.graph, "pos")
 
         # Given the step size, compute the x and y movement for each agent
-        offset_x, offset_y = compute_random_movement(self.num_agents, step)
+        offset_x, offset_y = self.compute_random_movement(step)
 
         # Update positions of the agents
         pos = {k: [v[0] + offset_x[k], v[1] + offset_y[k]] for k, v in pos.items()}
@@ -351,12 +345,19 @@ class World:
         # Agent can't be two hop neighbor of himself
         agent.two_hop_neighbours_ids[agent.id] = 0
 
+    # Method that calculate random movement for the agents if the graph is dynamic
+    def compute_random_movement(self, step):
+        ox = [step * self.np_random.uniform(-1, 1) for _ in range(self.num_agents)]
+        oy = [step * self.np_random.uniform(-1, 1) for _ in range(self.num_agents)]
+        return ox, oy
+
     def reset(self):
         if self.random_graph:
             self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
         elif not self.is_graph_fixed:
             if self.is_testing:
-                self.graph = load_graph(next(self.graphs))
+                if self.tested_agent == 0:
+                    self.graph = load_graph(next(self.graphs))
             else:
                 self.graph = load_graph(
                     self.np_random.choice(self.graphs, replace=True)
@@ -368,8 +369,13 @@ class World:
                        for i in range(self.num_agents)]
         # Includes origin message
         self.messages_transmitted = 0
-        random_agent = self.agents[0] if self.is_testing else self.np_random.choice(self.agents)
+        random_agent = self.agents[self.tested_agent] if self.is_testing else self.np_random.choice(self.agents)
         self.origin_agent = random_agent.id
+
+        if not self.is_graph_fixed and self.is_testing:
+            self.tested_agent += 1
+            if self.tested_agent == self.num_agents:
+                self.tested_agent = 0
 
         for agent in self.agents:
             agent.state.reset(self.num_agents)

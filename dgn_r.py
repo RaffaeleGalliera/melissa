@@ -13,7 +13,7 @@ import optuna
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-from tianshou.data import VectorReplayBuffer
+from tianshou.data import VectorReplayBuffer, PrioritizedVectorReplayBuffer
 from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
 from tianshou.policy import BasePolicy
@@ -100,6 +100,13 @@ def get_parser() -> argparse.ArgumentParser:
         help="Enable dynamic graphs"
     )
 
+    parser.add_argument(
+        "--prio-buffer",
+        default=False,
+        action="store_true",
+        help="Enable prioritized experience replay"
+    )
+
     parser.add_argument("--save-buffer-name", type=str, default=None)
     parser.add_argument("--model-name", type=str,
                         default=datetime.datetime.now().strftime(
@@ -120,6 +127,9 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-warmup-steps", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=None)
 
+    parser.add_argument("--alpha", type=float, default=0.6)
+    parser.add_argument("--beta", type=float, default=0.4)
+
     parser.add_argument(
         "--save-study",
         default=False,
@@ -132,7 +142,7 @@ def get_parser() -> argparse.ArgumentParser:
 
 def get_args() -> argparse.Namespace:
     parser = get_parser().parse_known_args()[0]
-    parser.learning_algorithm = "dgn"
+    parser.learning_algorithm = "dgn_r"
     return parser
 
 
@@ -212,7 +222,7 @@ def watch(
         args: argparse.Namespace = get_args(),
         masp_policy: BasePolicy = None,
 ) -> None:
-    weights_path = os.path.join(args.logdir, "mpr", "l_dgn", "weights",
+    weights_path = os.path.join(args.logdir, "mpr", "dgn_r", "weights",
                                 f"{args.model_name}")
 
     env = DummyVectorEnv([lambda: get_env(number_of_agents=args.n_agents,
@@ -229,7 +239,7 @@ def watch(
 
     collector = MultiAgentCollector(masp_policy, env, exploration_noise=False,
                                     number_of_agents=args.n_agents)
-    result = collector.collect(n_episode=args.test_num)
+    result = collector.collect(n_episode=args.test_num * args.n_agents)
 
     pprint.pprint(result)
     rews, lens = result["rews"], result["lens"]
@@ -262,16 +272,23 @@ def train_agent(
 
     masp_policy, optim, agents = get_agents(args, policy=masp_policy,
                                             optim=optim)
+
+    train_replay_buffer = PrioritizedVectorReplayBuffer(args.buffer_size,
+                                                        len(train_envs) * len(agents),
+                                                        stack_num=args.obs_stacks,
+                                                        ignore_obs_next=True,
+                                                        alpha=args.alpha,
+                                                        beta=args.beta) if args.prio_buffer else \
+                          VectorReplayBuffer(args.buffer_size,
+                                             len(train_envs) * len(agents),
+                                             stack_num=args.obs_stacks,
+                                             ignore_obs_next=True)
+
     # collector
     train_collector = MultiAgentCollector(
         masp_policy,
         train_envs,
-        VectorReplayBuffer(
-            args.buffer_size,
-            len(train_envs) * len(agents),
-            stack_num=args.obs_stacks,
-            ignore_obs_next=True
-        ),
+        train_replay_buffer,
         exploration_noise=True,
         number_of_agents=len(agents)
     )
@@ -291,12 +308,12 @@ def train_agent(
 
     if not args.optimize:
         # log
-        log_path = os.path.join(args.logdir, 'mpr', 'l_dgn')
+        log_path = os.path.join(args.logdir, 'mpr', 'dgn')
         logger = CustomLogger(project='dancing_bees', name=args.model_name)
         writer = SummaryWriter(log_path)
         writer.add_text("args", str(args))
         logger.load(writer)
-    weights_path = os.path.join(args.logdir, "mpr", "l_dgn", "weights")
+    weights_path = os.path.join(args.logdir, "mpr", "dgn_r", "weights")
     Path(weights_path).mkdir(parents=True, exist_ok=True)
 
     def save_best_fn(pol):
@@ -316,7 +333,7 @@ def train_agent(
     def train_fn(epoch, env_step):
         decay_factor = (1 - pow(e, (
                 log(args.eps_train_final) / (
-                args.exploration_fraction * args.epoch * args.step_per_epoch))))
+                    args.exploration_fraction * args.epoch * args.step_per_epoch))))
         eps = max(args.eps_train * (1 - decay_factor) ** env_step,
                   args.eps_train_final)
         masp_policy.policy.set_eps(eps)
@@ -339,7 +356,7 @@ def train_agent(
             max_epoch=args.epoch,
             step_per_epoch=args.step_per_epoch,
             step_per_collect=args.step_per_collect,
-            episode_per_test=args.test_num,
+            episode_per_test=args.test_num * args.n_agents,
             batch_size=args.batch_size,
             train_fn=train_fn,
             test_fn=test_fn,
@@ -360,7 +377,7 @@ def train_agent(
             max_epoch=args.epoch,
             step_per_epoch=args.step_per_epoch,
             step_per_collect=args.step_per_collect,
-            episode_per_test=args.test_num,
+            episode_per_test=args.test_num * args.n_agents,
             batch_size=args.batch_size,
             train_fn=train_fn,
             test_fn=test_fn,
