@@ -52,16 +52,30 @@ class MultiAgentCollaborativeSharedPolicy(MultiAgentSharedPolicy):
                     tmp_batch.info.indices = tmp_batch.info.indices[:,0,:]
 
                 valid_indices = np.where(tmp_batch.info.indices >= 0)
-                tmp_batch.active_obs = buffer.get(index=tmp_batch.info.indices[valid_indices], key='obs')
-                tmp_batch.active_obs.act = buffer.get(index=tmp_batch.info.indices[valid_indices], key='act', stack_num=1)
-                tmp_batch.active_obs.rew = save_rew[tmp_batch.info.indices[valid_indices], tmp_batch.active_obs.agent_id.astype(int)[:,0]]
+                tmp_batch.active_obs = buffer.get(
+                    index=tmp_batch.info.indices[valid_indices],
+                    key='obs'
+                )
+                tmp_batch.active_obs.act = buffer.get(
+                    index=tmp_batch.info.indices[valid_indices],
+                    key='act',
+                    stack_num=1
+                )
+                tmp_batch.active_obs.rew = save_rew[
+                    tmp_batch.info.indices[valid_indices].
+                    tmp_batch.active_obs.agent_id.astype(int)[:,0]
+                ]
                 tmp_batch.active_obs.index = tmp_batch.info.indices[valid_indices]
                 tmp_batch.active_obs.info = tmp_batch.info[valid_indices]
 
                 tmp_batch.rew = tmp_batch.rew[:, self.agent_idx[agent]]
                 buffer._meta.rew = save_rew[:, self.agent_idx[agent]]
 
-                tmp_batch.active_obs = self.policy.process_fn(tmp_batch.active_obs, buffer, tmp_batch.info.indices[valid_indices])
+                tmp_batch.active_obs = self.policy.process_fn(
+                    tmp_batch.active_obs,
+                    buffer,
+                    tmp_batch.info.indices[valid_indices]
+                )
             if not hasattr(tmp_batch.obs, "mask"):
                 if hasattr(tmp_batch.obs, 'obs'):
                     tmp_batch.obs = tmp_batch.obs.obs
@@ -70,12 +84,18 @@ class MultiAgentCollaborativeSharedPolicy(MultiAgentSharedPolicy):
             if has_rnn_mask:  # We need to handle masks in form [buffer_size, stack]
                 # at the moment masking is disabled
                 save_mask = buffer.obs.pop('mask')
-                results[agent] = self.policy.process_fn(tmp_batch, buffer,
-                                                        tmp_indice)
+                results[agent] = self.policy.process_fn(
+                    tmp_batch,
+                    buffer,
+                    tmp_indice
+                )
                 buffer.obs.mask = save_mask
             else:
-                results[agent] = self.policy.process_fn(tmp_batch, buffer,
-                                                        tmp_indice)
+                results[agent] = self.policy.process_fn(
+                    tmp_batch,
+                    buffer,
+                    tmp_indice
+                )
         if has_rew:  # restore from save_rew
             buffer._meta.rew = save_rew
         return Batch(results)

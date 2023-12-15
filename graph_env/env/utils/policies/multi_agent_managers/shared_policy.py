@@ -190,8 +190,24 @@ class MultiAgentSharedPolicy(BasePolicy):
             batch[key].obs.pop('mask', None) if not batch[key].is_empty() else None
 
         if batch_size and repeat:
-            results = self.policy.learn(Batch.cat([batch[agent_id] for agent_id in self.agents if not batch[agent_id].is_empty()]), batch_size, repeat)
+            results = self.policy.learn(
+                Batch.cat(
+                    [
+                        batch[agent_id] for agent_id in self.agents
+                        if not batch[agent_id].is_empty()
+                    ]
+                ),
+                batch_size,
+                repeat
+            )
         else:
-            results = self.policy.learn(Batch.cat([batch[agent_id] for agent_id in self.agents if not batch[agent_id].is_empty()]))
+            results = self.policy.learn(
+                Batch.cat(
+                    [
+                        batch[agent_id] for agent_id in self.agents
+                        if not batch[agent_id].is_empty()
+                    ]
+                )
+            )
 
         return results

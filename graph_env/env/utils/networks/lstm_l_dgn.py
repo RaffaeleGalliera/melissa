@@ -26,15 +26,25 @@ def to_pytorch_geometric_batch(obs, device):
     if len(obs.shape) == 2:
         obs = Batch.stack((obs, Batch()), axis=-2)
 
-    observations = [Data(
-            x=torch.as_tensor(observation[5], device=device, dtype=torch.float32),
-            edge_index=torch.as_tensor(observation[4], device=device,
-                                       dtype=torch.int),
+    observations = [
+        Data(
+            x=torch.as_tensor(
+                observation[5],
+                device=device,
+                dtype=torch.float32
+            ),
+            edge_index=torch.as_tensor(
+                observation[4],
+                device=device,
+                dtype=torch.int
+            ),
             index=observation[3][0],
             batch_index=[batch_index]
-        )
-        for sub_observation, batch_index in zip(obs.observation, range(len(obs.observation))) for observation in
-        sub_observation]
+        ) for sub_observation, batch_index
+        in zip(obs.observation, range(len(obs.observation)))
+        for observation in sub_observation
+    ]
+
     return PyGeomBatch.from_data_list(observations)
 
 
@@ -54,17 +64,28 @@ class RecurrentLDGNNetwork(nn.Module):
         super(RecurrentLDGNNetwork, self).__init__()
         self.aggregator_function = aggregator_function
         self.device = device
-        self.output_dim = hidden_dim * num_heads
         self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
         self.final_latent_dim = hidden_dim + hidden_dim * num_heads * 2
         self.use_dueling = dueling_param is not None
-        output_dim = output_dim if not self.use_dueling else 0
-        self.encoder = MLP(input_dim=input_dim, hidden_sizes=[hidden_dim],
-                           output_dim=hidden_dim, device=self.device)
-        self.conv1 = GATv2Conv(hidden_dim, hidden_dim, num_heads,
-                               device=self.device)
-        self.conv2 = GATv2Conv(hidden_dim * num_heads, hidden_dim, num_heads,
-                               device=self.device)
+        self.encoder = MLP(
+            input_dim=input_dim,
+            hidden_sizes=[hidden_dim],
+            output_dim=hidden_dim,
+            device=self.device
+        )
+        self.conv1 = GATv2Conv(
+            hidden_dim,
+            hidden_dim,
+            num_heads,
+            device=self.device
+        )
+        self.conv2 = GATv2Conv(
+            hidden_dim * num_heads,
+            hidden_dim,
+            num_heads,
+            device=self.device
+        )
         self.lstm = nn.LSTM(
             input_size=self.final_latent_dim,
             hidden_size=self.final_latent_dim,
@@ -74,7 +95,7 @@ class RecurrentLDGNNetwork(nn.Module):
 
         if self.use_dueling:
             q_kwargs, v_kwargs = dueling_param
-            q_output_dim, v_output_dim = 2, 1
+            q_output_dim, v_output_dim = self.output_dim, 1
 
             q_kwargs: Dict[str, Any] = {
                 **q_kwargs,
@@ -89,7 +110,6 @@ class RecurrentLDGNNetwork(nn.Module):
                 "device": self.device
             }
             self.Q, self.V = MLP(**q_kwargs), MLP(**v_kwargs)
-            self.output_dim = self.Q.output_dim
 
     def forward(self, obs, state=None, info={}):
         bsz = obs.shape[0]

@@ -124,12 +124,14 @@ class Agent:
         self.actions_history = np.zeros((4,))
 
     def reset(self, local_view, pos, one_hop_neighbours_ids):
-        self.__init__(agent_id=self.id,
-                      local_view=local_view,
-                      state=self.state,
-                      pos=pos,
-                      one_hop_neighbors_ids=one_hop_neighbours_ids,
-                      is_scripted=self.is_scripted)
+        self.__init__(
+            agent_id=self.id,
+            local_view=local_view,
+            state=self.state,
+            pos=pos,
+            one_hop_neighbors_ids=one_hop_neighbours_ids,
+            is_scripted=self.is_scripted
+        )
 
     def update_local_view(self, local_view):
         # local_view is updated
@@ -170,6 +172,7 @@ class World:
             dynamic_graph=False
     ):
         # Includes origin message
+        self.selected_graph = None
         self.messages_transmitted = 1
         self.origin_agent = None
         self.num_agents = number_of_agents
@@ -274,11 +277,14 @@ class World:
             agent.action if agent.action is not None else 0
         ]
 
-
     def update_local_graph(self, agent):
         agent.update_local_view(
-            local_view=nx.ego_graph(self.graph, agent.id,
-                                    undirected=True))
+            local_view=nx.ego_graph(
+                self.graph,
+                agent.id,
+                undirected=True
+            )
+        )
 
         agent.update_two_hop_cover_from_one_hopper(self.agents)
 
@@ -357,16 +363,17 @@ class World:
         elif not self.is_graph_fixed:
             if self.is_testing:
                 if self.tested_agent == 0:
-                    self.graph = load_graph(next(self.graphs))
+                    self.selected_graph = next(self.graphs)
             else:
-                self.graph = load_graph(
-                    self.np_random.choice(self.graphs, replace=True)
-                )
+                self.selected_graph = self.np_random.choice(self.graphs, replace=True)
+            
+            self.graph = load_graph(self.selected_graph)
 
-        self.agents = [Agent(i,
-                             nx.ego_graph(self.graph, i, undirected=True),
-                             is_scripted=self.is_scripted)
-                       for i in range(self.num_agents)]
+        self.agents = [Agent(
+            i,
+            nx.ego_graph(self.graph, i, undirected=True),
+            is_scripted=self.is_scripted
+        ) for i in range(self.num_agents)]
         # Includes origin message
         self.messages_transmitted = 0
         random_agent = self.agents[self.tested_agent] if self.is_testing else self.np_random.choice(self.agents)
@@ -386,12 +393,15 @@ class World:
 
         actions_dim = np.ones(2)
         for agent in self.agents:
-            agent.reset(local_view=nx.ego_graph(self.graph,
-                                                agent.id,
-                                                undirected=True),
-                        pos=self.graph.nodes[agent.id]['pos'],
-                        one_hop_neighbours_ids=agent.one_hop_neighbours_ids
-                        )
+            agent.reset(
+                local_view=nx.ego_graph(
+                    self.graph,
+                    agent.id,
+                    undirected=True
+                ),
+                pos=self.graph.nodes[agent.id]['pos'],
+                one_hop_neighbours_ids=agent.one_hop_neighbours_ids
+            )
 
             self.update_two_hop_neighbors(agent)
 

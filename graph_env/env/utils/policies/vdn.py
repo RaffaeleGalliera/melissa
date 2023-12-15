@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from tianshou.data import Batch, ReplayBuffer, to_torch_as
-from tianshou.policy import BasePolicy, DQNPolicy
+from .dqn import DQNPolicy
 try:
     from tianshou.env.pettingzoo_env import PettingZooEnv
 except ImportError:
@@ -34,12 +34,18 @@ class VDNPolicy(DQNPolicy):
             # Get ID indices of active obs in the whole experiment
             valid_indices = np.where(indices >= 0)
 
-            # Get active neighbour obs from batch filtering by obs index
-            neighbour_obs = Batch([batch.active_obs[np.where(batch.active_obs.index == index)[0][0]] for index in indices[valid_indices]])
-            q = self(neighbour_obs).logits
-            q = q[np.arange(len(q)), neighbour_obs.act]
+            # Get active obs from batch filtering by obs index
+            active_obs = Batch(
+                [
+                    batch.active_obs[
+                        np.where(batch.active_obs.index == index)[0][0]
+                    ] for index in indices[valid_indices]
+                ]
+            )
+            q = self(active_obs).logits
+            q = q[np.arange(len(q)), active_obs.act]
 
-            returns = to_torch_as(neighbour_obs.rew.flatten(), q)
+            returns = to_torch_as(active_obs.rew.flatten(), q)
             sum_q = q.sum()
             sum_returns = returns.sum()
             batch_q[i] = sum_q
