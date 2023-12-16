@@ -51,8 +51,10 @@ class MultiAgentCollector(Collector):
     def _assign_buffer(self, buffer: Optional[ReplayBuffer]) -> None:
         """Check if the buffer matches the constraint."""
         if buffer is None:
-            buffer = VectorReplayBuffer(self.env_num * self.number_of_agents,
-                                        self.env_num * self.number_of_agents)
+            buffer = VectorReplayBuffer(
+                self.env_num * self.number_of_agents,
+                self.env_num * self.number_of_agents
+            )
         elif isinstance(buffer, ReplayBufferManager):
             assert buffer.buffer_num >= self.env_num
             if isinstance(buffer, CachedReplayBuffer):
@@ -154,7 +156,7 @@ class MultiAgentCollector(Collector):
             # get bounded and remapped actions first (not saved into buffer)
             action_remap = self.policy.map_action(self.data.act)
             # step in available envs (we don't take a step if we have the last agent)
-            available = np.where(self.to_be_reset == False)[0]
+            available = np.where(self.to_be_reset==False)[0]
             result = None
             if len(available) > 0:
                 result = self.env.step(action_remap[available],
@@ -212,8 +214,6 @@ class MultiAgentCollector(Collector):
                 self.data.info.reset_all[ready_to_reset] = False
 
                 tmp_info = copy.deepcopy(self.data.info)
-                tmp_info[available] = info
-                info = tmp_info
 
                 info['environment_step'] = np.array(
                     [
@@ -222,6 +222,9 @@ class MultiAgentCollector(Collector):
                     ]
                 )
                 info['environment_step'][ready_to_reset] = True
+
+                tmp_info[available] = info
+                info = tmp_info
 
             # Result returns none when every agent in every environment is done
             elif len(ready_to_reset) and result is None:
