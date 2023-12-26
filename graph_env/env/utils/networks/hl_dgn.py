@@ -44,7 +44,7 @@ class HLDGNNetwork(nn.Module):
         super(HLDGNNetwork, self).__init__()
         self.aggregator_function = aggregator_function
         self.device = device
-        self.output_dim = hidden_dim * num_heads
+        self.final_latent_representation = hidden_dim * num_heads
         self.hidden_dim = hidden_dim
         self.use_dueling = dueling_param is not None
         self.conv1 = GATv2Conv(input_dim, hidden_dim, num_heads)
@@ -54,18 +54,17 @@ class HLDGNNetwork(nn.Module):
 
             q_kwargs: Dict[str, Any] = {
                 **q_kwargs,
-                "input_dim": self.output_dim,
+                "input_dim": self.final_latent_representation,
                 "output_dim": q_output_dim,
                 "device": self.device
             }
             v_kwargs: Dict[str, Any] = {
                 **v_kwargs,
-                "input_dim": self.output_dim,
+                "input_dim": self.final_latent_representation,
                 "output_dim": v_output_dim,
                 "device": self.device
             }
             self.Q, self.V = MLP(**q_kwargs), MLP(**v_kwargs)
-            self.output_dim = self.Q.output_dim
 
     def forward(self, obs, state=None, info={}):
         obs = to_pytorch_geometric_batch(obs, self.device)

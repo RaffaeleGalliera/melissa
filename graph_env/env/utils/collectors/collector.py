@@ -215,16 +215,16 @@ class MultiAgentCollector(Collector):
 
                 tmp_info = copy.deepcopy(self.data.info)
 
-                info['environment_step'] = np.array(
+                tmp_info['environment_step'] = np.array(
                     [
                         info_item.get("environment_step", False)
-                        for info_item in info
+                        for info_item in tmp_info
                     ]
                 )
-                info['environment_step'][ready_to_reset] = True
 
                 tmp_info[available] = info
                 info = tmp_info
+                info['environment_step'][ready_to_reset] = True
 
             # Result returns none when every agent in every environment is done
             elif len(ready_to_reset) and result is None:

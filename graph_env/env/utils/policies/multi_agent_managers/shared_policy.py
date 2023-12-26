@@ -148,6 +148,9 @@ class MultiAgentSharedPolicy(BasePolicy):
                     tmp_batch.obs_next = tmp_batch.obs_next.obs
             if len(tmp_batch.obs['mask'].shape) == 3:
                 tmp_batch.obs['mask'] = tmp_batch.obs['mask'][:, -1]
+            if isinstance(state, Batch) and state.is_empty():
+                state = None
+
             out = self.policy(
                 batch=tmp_batch,
                 state=None if state is None else state[agent_index],
