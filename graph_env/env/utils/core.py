@@ -278,12 +278,21 @@ class World:
         ]
 
     def update_local_graph(self, agent):
+        local_graph = nx.ego_graph(
+            self.graph,
+            agent.id,
+            undirected=True
+        )
+
+        edges = list(local_graph.edges())
+
+        # Remove edges that do not include the agent
+        for edge in edges:
+            if agent.id not in edge:
+                local_graph.remove_edge(*edge)
+
         agent.update_local_view(
-            local_view=nx.ego_graph(
-                self.graph,
-                agent.id,
-                undirected=True
-            )
+            local_view=local_graph
         )
 
         agent.update_two_hop_cover_from_one_hopper(self.agents)
