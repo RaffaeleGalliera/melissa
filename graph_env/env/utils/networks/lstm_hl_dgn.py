@@ -29,12 +29,12 @@ def to_pytorch_geometric_batch(obs, device):
     observations = [
         Data(
             x=torch.as_tensor(
-                observation[5],
+                observation[2],
                 device=device,
                 dtype=torch.float32
             ),
             edge_index=torch.as_tensor(
-                observation[4],
+                observation[0],
                 device=device,
                 dtype=torch.int
             ),
