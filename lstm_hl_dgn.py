@@ -80,7 +80,7 @@ def get_parser() -> argparse.ArgumentParser:
                         action="store_true",
                         default=False,
                         help="Use MPR policy")
-    parser.add_argument('--n-agents', type=int, choices=[20, 50], default=20)
+    parser.add_argument('--n-agents', type=int, choices=[20, 50, 100], default=20)
     parser.add_argument(
         "--watch",
         default=False,
