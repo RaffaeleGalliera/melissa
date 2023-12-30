@@ -78,7 +78,7 @@ def get_parser() -> argparse.ArgumentParser:
                         action="store_true",
                         default=False,
                         help="Use MPR policy")
-    parser.add_argument('--n-agents', type=int, choices=[20, 50], default=20)
+    parser.add_argument('--n-agents', type=int, choices=[20, 50, 100], default=20)
     parser.add_argument(
         "--watch",
         default=False,
@@ -154,13 +154,15 @@ def get_env(
         is_testing=False,
         dynamic_graph=False
 ):
-    env = graph_env_v0.env(graph=graph,
-                           render_mode=render_mode,
-                           number_of_agents=number_of_agents,
-                           radius=radius,
-                           is_scripted=is_scripted,
-                           is_testing=is_testing,
-                           dynamic_graph=dynamic_graph)
+    env = graph_env_v0.env(
+        graph=graph,
+        render_mode=render_mode,
+        number_of_agents=number_of_agents,
+        radius=radius,
+        is_scripted=is_scripted,
+        is_testing=is_testing,
+        dynamic_graph=dynamic_graph
+    )
     return PettingZooEnv(env)
 
 
@@ -221,23 +223,34 @@ def watch(
         args: argparse.Namespace = get_args(),
         masp_policy: BasePolicy = None,
 ) -> None:
-    weights_path = os.path.join(args.logdir, "mpr", "l_dgn", "weights",
-                                f"{args.model_name}")
+    weights_path = os.path.join(args.logdir, "mpr", "l_dgn", "weights", f"{args.model_name}")
 
-    env = DummyVectorEnv([lambda: get_env(number_of_agents=args.n_agents,
-                                          is_scripted=args.mpr_policy,
-                                          is_testing=True,
-                                          dynamic_graph=args.dynamic_graph,
-                                          render_mode="human")])
+    env = DummyVectorEnv(
+        [
+            lambda: get_env(
+                number_of_agents=args.n_agents,
+                is_scripted=args.mpr_policy,
+                is_testing=True,
+                dynamic_graph=args.dynamic_graph,
+                render_mode="human"
+            )
+        ]
+    )
 
+    env.seed(args.seed)
     if masp_policy is None:
         masp_policy = load_policy(weights_path, args, env)
 
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
 
-    collector = MultiAgentCollector(masp_policy, env, exploration_noise=False,
-                                    number_of_agents=args.n_agents)
+    collector = MultiAgentCollector(
+        masp_policy,
+        env,
+        exploration_noise=False,
+        number_of_agents=args.n_agents
+    )
+
     result = collector.collect(n_episode=args.test_num * args.n_agents)
 
     pprint.pprint(result)
@@ -254,11 +267,23 @@ def train_agent(
         opt_trial: optuna.Trial = None
 ) -> Tuple[dict, BasePolicy]:
     train_envs = SubprocVectorEnv(
-        [lambda: get_env(number_of_agents=args.n_agents) for i in
-         range(args.training_num)])
+        [
+            lambda: get_env(
+                number_of_agents=args.n_agents,
+                dynamic_graph=args.dynamic_graph
+            ) for i in range(args.training_num)
+        ]
+    )
+
     test_envs = SubprocVectorEnv(
-        [lambda: get_env(number_of_agents=args.n_agents,
-                         is_testing=True)])
+        [
+            lambda: get_env(
+                number_of_agents=args.n_agents,
+                dynamic_graph=args.dynamic_graph,
+                is_testing=True
+            )
+        ]
+    )
 
     # seed
     np.random.seed(args.seed)
@@ -266,17 +291,19 @@ def train_agent(
     train_envs.seed(args.seed)
     test_envs.seed(args.seed)
 
-    masp_policy, optim, agents = get_agents(args, policy=masp_policy,
-                                            optim=optim)
+    masp_policy, optim, agents = get_agents(args, policy=masp_policy, optim=optim)
 
-    train_replay_buffer = PrioritizedVectorReplayBuffer(args.buffer_size,
-                                                        len(train_envs) * len(agents),
-                                                        ignore_obs_next=True,
-                                                        alpha=args.alpha,
-                                                        beta=args.beta) if args.prio_buffer else \
-                          VectorReplayBuffer(args.buffer_size,
-                                             len(train_envs) * len(agents),
-                                             ignore_obs_next=True)
+    train_replay_buffer = PrioritizedVectorReplayBuffer(
+        args.buffer_size,
+        len(train_envs) * len(agents),
+        ignore_obs_next=True,
+        alpha=args.alpha,
+        beta=args.beta
+    ) if args.prio_buffer else VectorReplayBuffer(
+        args.buffer_size,
+        len(train_envs) * len(agents),
+        ignore_obs_next=True
+    )
 
     # collector
     train_collector = MultiAgentCollector(
@@ -289,9 +316,11 @@ def train_agent(
     test_collector = MultiAgentCollector(
         masp_policy,
         test_envs,
-        VectorReplayBuffer(args.buffer_size,
-                           len(test_envs) * len(agents),
-                           ignore_obs_next=True),
+        VectorReplayBuffer(
+            args.buffer_size,
+            len(test_envs) * len(agents),
+            ignore_obs_next=True
+        ),
         exploration_noise=False,
         number_of_agents=len(agents)
     )

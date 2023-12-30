@@ -14,7 +14,6 @@ from tianshou.data import (
     VectorReplayBuffer,
     to_numpy,
 )
-from tianshou.data.batch import _alloc_by_keys_diff
 from tianshou.env import BaseVectorEnv, DummyVectorEnv
 from tianshou.policy import BasePolicy
 import copy
@@ -35,7 +34,8 @@ class MultiAgentCollector(Collector):
     ) -> None:
         self.number_of_agents = number_of_agents
         self.done = np.full((len(env),), False)
-        self.next_done = np.full((len(env),), False)
+        self.terminated = np.full((len(env),), False)
+        self.truncated = np.full((len(env),), False)
         self.to_be_reset = np.full((len(env),), False)
         self.environment_step = np.full((len(env),), False)
         self.rews = np.zeros((len(env), number_of_agents))
@@ -51,8 +51,10 @@ class MultiAgentCollector(Collector):
     def _assign_buffer(self, buffer: Optional[ReplayBuffer]) -> None:
         """Check if the buffer matches the constraint."""
         if buffer is None:
-            buffer = VectorReplayBuffer(self.env_num * self.number_of_agents,
-                                        self.env_num * self.number_of_agents)
+            buffer = VectorReplayBuffer(
+                self.env_num * self.number_of_agents,
+                self.env_num * self.number_of_agents
+            )
         elif isinstance(buffer, ReplayBufferManager):
             assert buffer.buffer_num >= self.env_num
             if isinstance(buffer, CachedReplayBuffer):
@@ -78,7 +80,6 @@ class MultiAgentCollector(Collector):
             n_step: Optional[int] = None,
             n_episode: Optional[int] = None,
             random: bool = False,
-            # TODO check this for fps-based render
             render: Optional[float] = None,
             no_grad: bool = True,
             gym_reset_kwargs: Optional[Dict[str, Any]] = None,
@@ -155,7 +156,7 @@ class MultiAgentCollector(Collector):
             # get bounded and remapped actions first (not saved into buffer)
             action_remap = self.policy.map_action(self.data.act)
             # step in available envs (we don't take a step if we have the last agent)
-            available = np.where(self.to_be_reset == False)[0]
+            available = np.where(self.to_be_reset==False)[0]
             result = None
             if len(available) > 0:
                 result = self.env.step(action_remap[available],
@@ -184,6 +185,8 @@ class MultiAgentCollector(Collector):
 
             can_reset = False
             ready_to_reset = np.where(self.to_be_reset == True)[0]
+
+            # Result is not none because some environment has not finished yet
             if len(ready_to_reset) and result is not None:
                 can_reset = True
 
@@ -199,23 +202,51 @@ class MultiAgentCollector(Collector):
                 tmp_done[available] = next_done
                 next_done = tmp_done
 
+                tmp_terminated = copy.deepcopy(self.terminated)
+                tmp_terminated[available] = terminated
+                terminated = tmp_terminated
+
+                tmp_truncated = copy.deepcopy(self.truncated)
+                tmp_truncated[available] = truncated
+                truncated = tmp_truncated
+
                 # Envs ready_to_reset should not be reset again
                 self.data.info.reset_all[ready_to_reset] = False
 
                 tmp_info = copy.deepcopy(self.data.info)
+
+                tmp_info['environment_step'] = np.array(
+                    [
+                        info_item.get("environment_step", False)
+                        for info_item in tmp_info
+                    ]
+                )
+
                 tmp_info[available] = info
                 info = tmp_info
+                info['environment_step'][ready_to_reset] = True
 
+            # Result returns none when every agent in every environment is done
             elif len(ready_to_reset) and result is None:
                 can_reset = True
 
                 obs_next = self.data.obs
                 rew = self.data.rew
                 next_done = self.done
+                terminated = self.terminated
+                truncated = self.truncated
                 # These environments will be reset now
                 # Envs to reset should not be reset again
                 self.data.info.reset_all[ready_to_reset] = False
                 info = self.data.info
+
+                info['environment_step'] = np.array(
+                    [
+                        info_item.get("environment_step", False)
+                        for info_item in info
+                    ]
+                )
+                info['environment_step'][ready_to_reset] = True
 
             self.to_be_reset = np.array(
                 [
@@ -236,8 +267,8 @@ class MultiAgentCollector(Collector):
             self.data.update(
                 obs_next=obs_next,
                 rew=rew,
-                terminated=self.done,
-                truncated=self.done,
+                terminated=self.terminated,
+                truncated=self.truncated,
                 done=self.done,
                 info=info
             )
@@ -253,16 +284,49 @@ class MultiAgentCollector(Collector):
                     )
                 )
 
+            if render:
+                self.env.render()
+                if render > 0 and not np.isclose(render, 0):
+                    time.sleep(render)
+
+            self.envs_to_step_exps = Batch.cat(
+                (
+                    self.envs_to_step_exps,
+                    self.data
+                )
+            )
+
+            # Add experiences to buffer once every agent in the env has stepped
+            if self.environment_step.any():
+                stepping_envs = np.where(self.environment_step)[0]
+                # Get envs that stepped
+                envs_to_step_exps_indices = self.envs_to_step_exps.info.env_id
+
+                # Filter experiences for the stepping environments
+                self.exps = self.envs_to_step_exps[
+                    np.isin(envs_to_step_exps_indices, stepping_envs)]
+
+                # Remove experiences from envs_to_step_exps
+                self.envs_to_step_exps = self.envs_to_step_exps[
+                    ~np.isin(envs_to_step_exps_indices, stepping_envs)]
+
+                step_count += len(self.exps)
+
             # Add rew to exps after they all stepped
             if self.exps is not None:
                 self.exps.rew = self.rews[self.exps.info.env_id]
                 # Calculate buffer_ids and exps_indices in a vectorized manner
                 buffer_ids = (self.exps.info.env_id * self.number_of_agents) + self.exps.obs.agent_id.astype(int)
-                exps_indices = np.array([x.last_index + self.buffer._offset[i] for
-                                x, i in zip(self.buffer.buffers[buffer_ids],
-                                            buffer_ids)]).flatten()
-                # Update indices for VDN
-                indices = np.full((self.env_num, self.number_of_agents), -1, dtype=np.int64)
+                exps_indices = np.array(
+                    [x.last_index + self.buffer._offset[i] for
+                     x, i in zip(self.buffer.buffers[buffer_ids],
+                                 buffer_ids)]).flatten()
+                # Update indices for Collaborative Learning Algos
+                indices = np.full(
+                    (self.env_num, self.number_of_agents),
+                    -1,
+                    dtype=np.int64
+                )
                 row_indices = self.exps.info.env_id
                 col_indices = self.exps.obs.agent_id.astype(int)
                 indices[row_indices, col_indices] = exps_indices
@@ -275,41 +339,21 @@ class MultiAgentCollector(Collector):
                     buffer_ids=buffer_ids
                 )
 
-                # Check that we don't have multiple entries for the same env, agent_id tuple
-                # ass   ert len(list(zip(self.exps.obs.agent_id, self.exps.info.env_id))) == len(set(zip(self.exps.obs.agent_id, self.exps.info.env_id)))
-
                 # Add stats for done environments
                 if np.any(self.exps.done):
                     done_eps = np.where(self.exps.done)[0]
                     episode_count += len(done_eps)
                     episode_lens.append(ep_len[done_eps])
-                    episode_rews.append(ep_rew[done_eps, self.exps.obs.agent_id[done_eps].astype(int)])
-                    for env, rew in zip(self.exps.info.env_id[done_eps], ep_rew[done_eps, self.exps.obs.agent_id[done_eps].astype(int)]):
+                    episode_rews.append(ep_rew[done_eps,
+                    self.exps.obs.agent_id[done_eps].astype(int)])
+                    for env, rew in zip(self.exps.info.env_id[done_eps],
+                                        ep_rew[done_eps,
+                                        self.exps.obs.agent_id[
+                                            done_eps].astype(int)]):
                         self.master_episode_rews[env] += rew
                     episode_start_indices.append(ep_idx[done_eps])
                 # assert not np.any(ep_len > 5)
                 self.exps = None
-
-            if render:
-                self.env.render()
-                if render > 0 and not np.isclose(render, 0):
-                    time.sleep(render)
-
-            self.envs_to_step_exps = Batch.cat(
-                (self.envs_to_step_exps, self.data))
-
-            if self.environment_step.any():
-                stepping_envs = np.where(self.environment_step)[0]
-                step_count += len(stepping_envs)
-
-                envs_to_step_exps_indices = self.envs_to_step_exps.info.env_id
-
-                # Filter experiences for the stepping environments
-                self.exps = self.envs_to_step_exps[np.isin(envs_to_step_exps_indices, stepping_envs)]
-
-                # Remove experiences from envs_to_step_exps
-                self.envs_to_step_exps = self.envs_to_step_exps[
-                    ~np.isin(envs_to_step_exps_indices, stepping_envs)]
 
             # episode rews should be gathered when an agent's episode is done not
             # when everyone resets
@@ -340,9 +384,14 @@ class MultiAgentCollector(Collector):
                         self.data = self.data[mask]
 
                 next_done[ready_to_reset] = False
+                terminated[ready_to_reset] = False
+                truncated[ready_to_reset] = False
 
             self.data.obs = self.data.obs_next
             self.done = next_done
+            self.terminated = terminated
+            self.truncated = truncated
+
             if (n_step and step_count >= n_step) or \
                     (n_episode and master_episode_count >= n_episode):
                 break

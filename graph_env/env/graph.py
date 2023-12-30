@@ -135,12 +135,10 @@ class GraphEnv(AECEnv):
     def observe(self, agent: str):
         if all(value for key, value in self.terminations.items() if
                key in self.agents) and len(self.agents) == 1:
-            self.infos[self.agents[0]] = {'reset_all': True,
-                                          'messages_transmitted': self.world.messages_transmitted,
-                                          'coverage': sum([1 for agent in self.world.agents if
-                                                           sum(agent.state.received_from) or agent.state.message_origin]) / self.world.num_agents,
-                                          'environment_step': True # Unload the collector sub-buffer
-                                          }
+            self.infos[self.agents[0]] = {
+                'reset_all': True,
+                'messages_transmitted': self.world.messages_transmitted,
+                'coverage': sum([1 for agent in self.world.agents if sum(agent.state.received_from) or agent.state.message_origin]) / self.world.num_agents}
             self.is_new_round = False
 
         # Todo: Need to fix resetting of the environment doesn't issue environment_step
@@ -338,9 +336,12 @@ class GraphEnv(AECEnv):
         two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
         assert (set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
 
+        if len(one_hop_neighbor_indices) == 0:
+            return 0 if agent.action else 1
+
         reward = agent.two_hop_cover / len(two_hop_neighbor_indices)
-        if sum(agent.state.transmitted_to):
-            penalty_1 = sum([self.world.agents[index].messages_transmitted for index in one_hop_neighbor_indices]) / len(one_hop_neighbor_indices)
+        if agent.action:
+            penalty_1 = sum([1 for index in one_hop_neighbor_indices if self.world.agents[index].action]) / len(one_hop_neighbor_indices)
             reward = reward - penalty_1
         if not sum(agent.state.transmitted_to):
             uncovered_n_lens = [len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if

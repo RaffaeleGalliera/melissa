@@ -79,6 +79,8 @@ class State:
         self.relays_for = None
         self.relayed_by = None
         self.message_origin = 0
+        # Used for memory-less MPR heuristic
+        self.has_taken_action = 0
 
     def reset(self, num_agents):
         self.received_from = np.zeros(num_agents)
@@ -122,12 +124,14 @@ class Agent:
         self.actions_history = np.zeros((4,))
 
     def reset(self, local_view, pos, one_hop_neighbours_ids):
-        self.__init__(agent_id=self.id,
-                      local_view=local_view,
-                      state=self.state,
-                      pos=pos,
-                      one_hop_neighbors_ids=one_hop_neighbours_ids,
-                      is_scripted=self.is_scripted)
+        self.__init__(
+            agent_id=self.id,
+            local_view=local_view,
+            state=self.state,
+            pos=pos,
+            one_hop_neighbors_ids=one_hop_neighbours_ids,
+            is_scripted=self.is_scripted
+        )
 
     def update_local_view(self, local_view):
         # local_view is updated
@@ -168,6 +172,7 @@ class World:
             dynamic_graph=False
     ):
         # Includes origin message
+        self.selected_graph = None
         self.messages_transmitted = 1
         self.origin_agent = None
         self.num_agents = number_of_agents
@@ -214,12 +219,15 @@ class World:
                 self.agents[index].state.relays_for[agent.id] = 1
 
         for agent in self.scripted_agents:
-            if (agent.has_received_from_relayed_node()
-                or agent.state.message_origin) \
-                    and not sum(agent.state.transmitted_to):
-                agent.action = 1
-            else:
-                agent.action = 0
+            agent.action = 0
+
+            # Check if the agent has taken an action or received a message
+            if not agent.state.has_taken_action and (
+                    sum(agent.state.received_from) or agent.state.message_origin):
+                # Check the specific conditions to update the action to 1
+                if agent.has_received_from_relayed_node() or agent.state.message_origin:
+                    agent.action = 1
+                agent.state.has_taken_action = 1
 
         # Send message
         for agent in self.agents:
@@ -238,6 +246,10 @@ class World:
         # Local graph of every agent is updated
         for agent in self.agents:
             self.update_local_graph(agent)
+
+        # Reset MPR Policies
+        for agent in self.scripted_agents:
+            agent.state.relays_for = np.zeros(self.num_agents)
 
     def update_agent_state(self, agent):
         # If it has received from a relay node or is message origin
@@ -261,23 +273,27 @@ class World:
 
         self.graph.nodes[agent.id]['features_actor'] = [
             sum(agent.one_hop_neighbours_ids),
-            agent.messages_transmitted
+            agent.messages_transmitted,
+            agent.action if agent.action is not None else 0
         ]
 
-        self.graph.nodes[agent.id]['features_critic'] = np.concatenate(
-            (self.graph.nodes[agent.id]['features_critic'],
-             agent.actions_history)
-        )
-
-        self.graph.nodes[agent.id]['features_actor'] = np.concatenate(
-            (self.graph.nodes[agent.id]['features_actor'],
-             agent.actions_history)
-        )
-
     def update_local_graph(self, agent):
+        local_graph = nx.ego_graph(
+            self.graph,
+            agent.id,
+            undirected=True
+        )
+
+        edges = list(local_graph.edges())
+
+        # Remove edges that do not include the agent
+        for edge in edges:
+            if agent.id not in edge:
+                local_graph.remove_edge(*edge)
+
         agent.update_local_view(
-            local_view=nx.ego_graph(self.graph, agent.id,
-                                    undirected=True))
+            local_view=local_graph
+        )
 
         agent.update_two_hop_cover_from_one_hopper(self.agents)
 
@@ -356,16 +372,17 @@ class World:
         elif not self.is_graph_fixed:
             if self.is_testing:
                 if self.tested_agent == 0:
-                    self.graph = load_graph(next(self.graphs))
+                    self.selected_graph = next(self.graphs)
             else:
-                self.graph = load_graph(
-                    self.np_random.choice(self.graphs, replace=True)
-                )
+                self.selected_graph = self.np_random.choice(self.graphs, replace=True)
+            
+            self.graph = load_graph(self.selected_graph)
 
-        self.agents = [Agent(i,
-                             nx.ego_graph(self.graph, i, undirected=True),
-                             is_scripted=self.is_scripted)
-                       for i in range(self.num_agents)]
+        self.agents = [Agent(
+            i,
+            nx.ego_graph(self.graph, i, undirected=True),
+            is_scripted=self.is_scripted
+        ) for i in range(self.num_agents)]
         # Includes origin message
         self.messages_transmitted = 0
         random_agent = self.agents[self.tested_agent] if self.is_testing else self.np_random.choice(self.agents)
@@ -385,12 +402,15 @@ class World:
 
         actions_dim = np.ones(2)
         for agent in self.agents:
-            agent.reset(local_view=nx.ego_graph(self.graph,
-                                                agent.id,
-                                                undirected=True),
-                        pos=self.graph.nodes[agent.id]['pos'],
-                        one_hop_neighbours_ids=agent.one_hop_neighbours_ids
-                        )
+            agent.reset(
+                local_view=nx.ego_graph(
+                    self.graph,
+                    agent.id,
+                    undirected=True
+                ),
+                pos=self.graph.nodes[agent.id]['pos'],
+                one_hop_neighbours_ids=agent.one_hop_neighbours_ids
+            )
 
             self.update_two_hop_neighbors(agent)
 

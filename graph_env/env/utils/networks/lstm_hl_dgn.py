@@ -1,4 +1,5 @@
 from typing import Optional, Tuple, Dict, Any
+from tianshou.data import Batch
 
 import torch
 import torch.nn as nn
@@ -13,22 +14,41 @@ from torch_geometric.data.batch import Batch as PyGeomBatch
 
 
 def to_pytorch_geometric_batch(obs, device):
+    """
+    In the evaluation mode, `obs` should be with shape ``[bsz, dim]``; in the
+    training mode, `obs` should be with shape ``[bsz, len, dim]``. See the code
+    and comment for more detail.
+    """
+
+    # obs [bsz, len, dim] (training) or [bsz, dim] (evaluation)
+    # In short, the tensor's shape in training phase is longer than which
+    # in evaluation phase.
+    if len(obs.shape) == 2:
+        obs = Batch.stack((obs, Batch()), axis=-2)
+
     observations = [
         Data(
             x=torch.as_tensor(
-                observation[5],
+                observation[2],
                 device=device,
-                dtype=torch.float32),
+                dtype=torch.float32
+            ),
             edge_index=torch.as_tensor(
-                observation[4],
+                observation[0],
                 device=device,
-                dtype=torch.int),
-            index=observation[3][0]) for observation in obs.observation
+                dtype=torch.int
+            ),
+            index=observation[3][0],
+            batch_index=[batch_index]
+        ) for sub_observation, batch_index
+        in zip(obs.observation, range(len(obs.observation)))
+        for observation in sub_observation
     ]
+
     return PyGeomBatch.from_data_list(observations)
 
 
-class LDGNNetwork(nn.Module):
+class RecurrentHLDGNNetwork(nn.Module):
     def __init__(
             self,
             input_dim,
@@ -41,35 +61,29 @@ class LDGNNetwork(nn.Module):
             device='cpu',
             aggregator_function=global_max_pool
     ):
-        super(LDGNNetwork, self).__init__()
+        super(RecurrentHLDGNNetwork, self).__init__()
         self.aggregator_function = aggregator_function
         self.device = device
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
-        self.final_latent_dim = hidden_dim + hidden_dim * num_heads * 2
+        self.final_latent_dim = hidden_dim * num_heads
         self.use_dueling = dueling_param is not None
-        self.encoder = MLP(
-            input_dim=input_dim,
-            hidden_sizes=[hidden_dim],
-            output_dim=hidden_dim,
-            device=self.device
-        )
         self.conv1 = GATv2Conv(
-            hidden_dim,
+            input_dim,
             hidden_dim,
             num_heads,
             device=self.device
         )
-        self.conv2 = GATv2Conv(
-            hidden_dim * num_heads,
-            hidden_dim,
-            num_heads,
-            device=self.device
+        self.lstm = nn.LSTM(
+            input_size=self.final_latent_dim,
+            hidden_size=self.final_latent_dim,
+            num_layers=1,
+            batch_first=True,
         )
 
         if self.use_dueling:
             q_kwargs, v_kwargs = dueling_param
-            q_output_dim, v_output_dim = 2, 1
+            q_output_dim, v_output_dim = self.output_dim, 1
 
             q_kwargs: Dict[str, Any] = {
                 **q_kwargs,
@@ -84,24 +98,30 @@ class LDGNNetwork(nn.Module):
                 "device": self.device
             }
             self.Q, self.V = MLP(**q_kwargs), MLP(**v_kwargs)
-            self.output_dim = self.Q.output_dim
 
     def forward(self, obs, state=None, info={}):
+        bsz = obs.shape[0]
+        horizon = obs.shape[1] if len(obs.shape) == 3 else 1
+
         obs = to_pytorch_geometric_batch(obs, self.device)
-        indices = [range[0][index[0]] for range, index in
-                   zip([torch.where(obs.batch == value) for value in
-                        torch.unique(obs.batch)], obs.index)]
         x, edge_index = obs.x, obs.edge_index
-        x = self.encoder(x)
-        x = F.relu(x)
-        x_1 = x[indices, :]
         x = self.conv1(x, edge_index)
         x = F.relu(x)
-        x_2 = x[indices, :]
-        x = self.conv2(x, edge_index)
-        x = F.relu(x)
-        x_3 = x[indices, :]
-        x = torch.cat([x_1, x_2, x_3], dim=1)
-        q, v = self.Q(x), self.V(x)
+        x = self.aggregator_function(x, batch=obs.batch)
+        x = x.reshape(bsz, horizon, self.final_latent_dim)
+        self.lstm.flatten_parameters()
+        if state is None or state.is_empty():
+            x, (hidden, cell) = self.lstm(x)
+        else:
+            x, (hidden, cell) = self.lstm(
+                x, (
+                    state["hidden"].transpose(0, 1),
+                    state["cell"].transpose(0, 1)
+                )
+            )
+        q, v = self.Q(x[:, -1]), self.V(x[:, -1])
         x = q - q.mean(dim=1, keepdim=True) + v
-        return x, state
+        return x, {
+            "hidden": hidden.transpose(0, 1).detach(),
+            "cell": cell.transpose(0, 1).detach()
+        }

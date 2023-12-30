@@ -13,14 +13,20 @@ from torch_geometric.data.batch import Batch as PyGeomBatch
 
 
 def to_pytorch_geometric_batch(obs, device):
-    observations = [Data(x=torch.as_tensor(observation[5],
-                                           device=device,
-                                           dtype=torch.float32),
-                         edge_index=torch.as_tensor(observation[4],
-                                                    device=device,
-                                                    dtype=torch.int),
-                         index=observation[3][0]) for observation in
-                    obs.observation]
+    observations = [
+        Data(
+            x=torch.as_tensor(
+                observation[5],
+                device=device,
+                dtype=torch.float32
+            ),
+            edge_index=torch.as_tensor(
+                observation[4],
+                device=device,
+                dtype=torch.int
+            ),
+            index=observation[3][0]) for observation in obs.observation
+    ]
     return PyGeomBatch.from_data_list(observations)
 
 
@@ -44,12 +50,23 @@ class DGNRNetwork(nn.Module):
         self.hidden_dim = hidden_dim
         self.use_dueling = dueling_param is not None
         output_dim = output_dim if not self.use_dueling else 0
-        self.encoder = MLP(input_dim=input_dim, hidden_sizes=[512],
-                           output_dim=hidden_dim, device=self.device)
-        self.conv1 = GATv2Conv(hidden_dim, hidden_dim, num_heads,
-                               device=self.device)
-        self.conv2 = GATv2Conv(hidden_dim * num_heads, hidden_dim, num_heads,
-                               device=self.device)
+        self.encoder = MLP(
+            input_dim=input_dim,
+            hidden_sizes=[512],
+            output_dim=hidden_dim,
+            device=self.device
+        )
+        self.conv1 = GATv2Conv(
+            hidden_dim,
+            hidden_dim,
+            num_heads,
+            device=self.device
+        )
+        self.conv2 = GATv2Conv(
+            hidden_dim * num_heads,
+            hidden_dim, num_heads,
+            device=self.device
+        )
 
         q_kwargs, v_kwargs = dueling_param
         q_output_dim = 2

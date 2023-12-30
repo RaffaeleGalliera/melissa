@@ -25,16 +25,24 @@ class NVDNPolicy(DQNPolicy):
 
         for i, exp in enumerate(batch):
             # Get ID indices of batch active obs and intersect with valid neighbours
-            active_neighbors = np.intersect1d(np.where(exp.info.indices >= 0), exp.obs.obs.observation[1]).astype(int)
+            active_neighbors = np.intersect1d(
+                np.where(exp.info.indices >= 0),
+                exp.obs.obs.observation[1]
+            ).astype(int)
             valid_indices = exp.info.indices[active_neighbors]
 
             # Get active neighbour obs from batch filtering by obs index
-            neighbour_obs = batch.active_obs[[np.where(batch.active_obs.index == index)[0][0] for index in valid_indices]]
+            neighbour_obs = batch.active_obs[
+                [
+                    np.where(batch.active_obs.index == index)[0][0]
+                    for index in valid_indices
+                ]
+            ]
             assert len(neighbour_obs) <= len(exp.obs.obs.observation[1])
             q = self(neighbour_obs).logits
             q = q[np.arange(len(q)), neighbour_obs.act]
 
-            returns = to_torch_as(neighbour_obs.rew.flatten(), q)
+            returns = to_torch_as(neighbour_obs.returns.flatten(), q)
             sum_q = q.sum()
             sum_returns = returns.sum()
             batch_q[i] = sum_q
