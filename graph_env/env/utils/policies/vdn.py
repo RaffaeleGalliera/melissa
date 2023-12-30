@@ -45,7 +45,7 @@ class VDNPolicy(DQNPolicy):
             q = self(active_obs).logits
             q = q[np.arange(len(q)), active_obs.act]
 
-            returns = to_torch_as(active_obs.rew.flatten(), q)
+            returns = to_torch_as(active_obs.returns.flatten(), q)
             sum_q = q.sum()
             sum_returns = returns.sum()
             batch_q[i] = sum_q

@@ -23,7 +23,8 @@ class DGNPolicy(DQNPolicy):
         td_error = torch.zeros((len(batch), ), device=device)
 
         for i, exp in enumerate(batch):
-            # Get ID indices of active obs in the whole experiment
+            # Get ID indice np.where(batch.active_obs.index == batch.active_obs.index[1])s of active obs in the whole experiment
+            # TODO fix active obs should contain already only active obs thanks to collab shared policy
             valid_indices = exp.info.indices[np.where(exp.info.indices >= 0)].astype(int)
 
             # Get active active obs from batch filtering by obs index
@@ -37,7 +38,7 @@ class DGNPolicy(DQNPolicy):
             q = self(active_obs).logits
             q = q[np.arange(len(q)), active_obs.act]
 
-            returns = to_torch_as(active_obs.rew.flatten(), q)
+            returns = to_torch_as(active_obs.returns.flatten(), q)
             partial_loss[i] = ((returns - q).pow(2)).mean()
             td_error[i] = (returns - q).mean()
 

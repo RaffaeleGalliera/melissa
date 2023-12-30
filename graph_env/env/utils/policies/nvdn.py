@@ -42,7 +42,7 @@ class NVDNPolicy(DQNPolicy):
             q = self(neighbour_obs).logits
             q = q[np.arange(len(q)), neighbour_obs.act]
 
-            returns = to_torch_as(neighbour_obs.rew.flatten(), q)
+            returns = to_torch_as(neighbour_obs.returns.flatten(), q)
             sum_q = q.sum()
             sum_returns = returns.sum()
             batch_q[i] = sum_q

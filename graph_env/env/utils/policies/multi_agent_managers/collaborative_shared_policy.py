@@ -49,38 +49,60 @@ class MultiAgentCollaborativeSharedPolicy(MultiAgentSharedPolicy):
                 tmp_batch.rew_list = tmp_batch.rew
                 if has_rnn_mask:
                     # Indices can be -1 when agents appear dynamically
-                    tmp_batch.info.indices = tmp_batch.info.indices[:,0,:]
+                    tmp_batch.info.indices = tmp_batch.info.indices[:, -1, :]
 
                 valid_indices = np.where(tmp_batch.info.indices >= 0)
                 tmp_batch.active_obs = buffer.get(
                     index=tmp_batch.info.indices[valid_indices],
                     key='obs'
                 )
+                tmp_batch.active_obs.index = tmp_batch.info.indices[valid_indices]
+
                 tmp_batch.active_obs.act = buffer.get(
-                    index=tmp_batch.info.indices[valid_indices],
+                    index=tmp_batch.active_obs.index,
                     key='act',
                     stack_num=1
                 )
+
                 tmp_batch.active_obs.rew = save_rew[
-                    tmp_batch.info.indices[valid_indices].
-                    tmp_batch.active_obs.agent_id.astype(int)[:,0]
+                    tmp_batch.active_obs.index,
+                    tmp_batch.active_obs.agent_id.astype(int)[:, 0] if has_rnn_mask else tmp_batch.active_obs.agent_id.astype(int)
                 ]
-                tmp_batch.active_obs.index = tmp_batch.info.indices[valid_indices]
-                tmp_batch.active_obs.info = tmp_batch.info[valid_indices]
 
-                tmp_batch.rew = tmp_batch.rew[:, self.agent_idx[agent]]
-                buffer._meta.rew = save_rew[:, self.agent_idx[agent]]
+                tmp_batch.active_obs.info = Batch()
 
-                tmp_batch.active_obs = self.policy.process_fn(
-                    tmp_batch.active_obs,
-                    buffer,
-                    tmp_batch.info.indices[valid_indices]
-                )
+                # Filter rewards based on agent id in order to have coherent n-step returns
+                buffer._meta.rew = save_rew[
+                    np.arange(save_rew.shape[0]),
+                    list(map(lambda x: int(x) if x is not None else 0, buffer._meta.obs.agent_id))
+                ]
+                tmp_batch.rew = tmp_batch.rew[
+                    np.arange(tmp_batch.rew.shape[0]),
+                    tmp_batch.obs.agent_id.astype(int)[:, 0] if has_rnn_mask else tmp_batch.obs.agent_id.astype(int)
+                ]
+
+                if has_rnn_mask:  # We need to handle masks in form [buffer_size, stack]
+                    # at the moment masking is disabled
+                    save_mask = buffer.obs.pop('mask')
+                    tmp_batch.active_obs = self.policy.process_fn(
+                        tmp_batch.active_obs,
+                        buffer,
+                        tmp_batch.active_obs.index
+                    )
+                    buffer.obs.mask = save_mask
+                else:
+                    tmp_batch.active_obs = self.policy.process_fn(
+                        tmp_batch.active_obs,
+                        buffer,
+                        tmp_batch.active_obs.index
+                    )
+
             if not hasattr(tmp_batch.obs, "mask"):
                 if hasattr(tmp_batch.obs, 'obs'):
                     tmp_batch.obs = tmp_batch.obs.obs
                 if hasattr(tmp_batch.obs_next, 'obs'):
                     tmp_batch.obs_next = tmp_batch.obs_next.obs
+
             if has_rnn_mask:  # We need to handle masks in form [buffer_size, stack]
                 # at the moment masking is disabled
                 save_mask = buffer.obs.pop('mask')
