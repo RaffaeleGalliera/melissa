@@ -239,6 +239,10 @@ def watch(
         ]
     )
 
+    env.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+
     if masp_policy is None:
         masp_policy = load_policy(weights_path, args, env)
 
