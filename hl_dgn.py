@@ -234,7 +234,8 @@ def watch(
                 is_scripted=args.mpr_policy,
                 is_testing=True,
                 dynamic_graph=args.dynamic_graph,
-                render_mode="human"
+                render_mode="human",
+                watch=True
             )
         ]
     )
