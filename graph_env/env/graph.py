@@ -36,7 +36,8 @@ class GraphEnv(AECEnv):
             is_scripted=False,
             is_testing=False,
             random_graph=False,
-            dynamic_graph=False
+            dynamic_graph=False,
+            watch=False
     ):
         super().__init__()
         self.seed()
@@ -55,7 +56,8 @@ class GraphEnv(AECEnv):
                            is_scripted=is_scripted,
                            is_testing=is_testing,
                            random_graph=random_graph,
-                           dynamic_graph=dynamic_graph)
+                           dynamic_graph=dynamic_graph,
+                           watch=watch)
 
         # Needs to be a string for assertions check in tianshou
         self.agents = [agent.name for agent in self.world.agents]
