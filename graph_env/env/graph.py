@@ -396,7 +396,7 @@ class GraphEnv(AECEnv):
             uncovered_n_lens = [len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if
                                 sum(self.world.agents[index].state.received_from) == 0
                                 and self.world.agents[index].state.message_origin == 0]
-            penalty_2 = max(uncovered_n_lens) if len(uncovered_n_lens) else 0
+            penalty_2 = max(uncovered_n_lens)/sum(uncovered_n_lens) if len(uncovered_n_lens) else 0
             reward = reward - penalty_2
 
         return reward
