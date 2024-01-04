@@ -389,7 +389,7 @@ class GraphEnv(AECEnv):
             return 0 if agent.action else 1
 
         reward = agent.two_hop_cover / len(two_hop_neighbor_indices)
-        if agent.action:
+        if agent.messages_transmitted:
             penalty_1 = sum([self.world.agents[index].messages_transmitted for index in one_hop_neighbor_indices]) / len(one_hop_neighbor_indices)
             reward = reward - penalty_1
         else:
