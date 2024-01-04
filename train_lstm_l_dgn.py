@@ -19,8 +19,6 @@ def test_mpr(args=get_args()):
 
     if __name__ == '__main__':
         pprint.pprint(result)
-        # Let's watch its performance!
-        watch(args, masp_policy=masp_policy)
 
 
 if __name__ == '__main__':
