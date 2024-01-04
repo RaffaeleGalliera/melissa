@@ -152,7 +152,8 @@ def get_env(
         render_mode=None,
         is_scripted=False,
         is_testing=False,
-        dynamic_graph=False
+        dynamic_graph=False,
+        all_agents_source=False
 ):
     env = graph_env_v0.env(
         graph=graph,
@@ -161,10 +162,10 @@ def get_env(
         radius=radius,
         is_scripted=is_scripted,
         is_testing=is_testing,
-        dynamic_graph=dynamic_graph
+        dynamic_graph=dynamic_graph,
+        all_agents_source=all_agents_source
     )
     return PettingZooEnv(env)
-
 
 
 def get_agents(
@@ -235,7 +236,7 @@ def watch(
                 is_testing=True,
                 dynamic_graph=args.dynamic_graph,
                 render_mode="human",
-                watch=True
+                all_agents_source=True
             )
         ]
     )

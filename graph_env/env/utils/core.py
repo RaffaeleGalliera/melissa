@@ -170,7 +170,7 @@ class World:
             is_testing=False,
             random_graph=False,
             dynamic_graph=False,
-            watch=False
+            all_agents_source=False
     ):
         # Includes origin message
         self.selected_graph = None
@@ -179,7 +179,7 @@ class World:
         self.num_agents = number_of_agents
         self.radius = radius
         self.graph = graph
-        self.watch = watch
+        self.all_agents_source = all_agents_source
         self.is_graph_fixed = True if graph else False
         self.is_scripted = is_scripted
         self.random_graph = random_graph
@@ -391,7 +391,7 @@ class World:
         self.origin_agent = random_agent.id
 
         if not self.is_graph_fixed and self.is_testing:
-            if self.watch:
+            if self.all_agents_source:
                 self.tested_agent += 1
                 if self.tested_agent == self.num_agents:
                     self.tested_agent = 0
