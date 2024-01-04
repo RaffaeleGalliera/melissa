@@ -390,7 +390,7 @@ class GraphEnv(AECEnv):
 
         reward = agent.two_hop_cover / len(two_hop_neighbor_indices)
         if agent.messages_transmitted > 0:
-            penalty_1 = sum([1 for index in one_hop_neighbor_indices if self.world.agents[index].messages_transmitted] > 0) / len(one_hop_neighbor_indices)
+            penalty_1 = sum([1 for index in one_hop_neighbor_indices if self.world.agents[index].messages_transmitted > 0]) / len(one_hop_neighbor_indices)
             reward = reward - penalty_1
         else:
             uncovered_n_lens = [len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if
