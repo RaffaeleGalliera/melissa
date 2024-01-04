@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tianshou.utils.net.common import MLP
-from torch_geometric.nn import GATv2Conv, GAT
+from torch_geometric.nn import GATConv
 from torch_geometric.nn import global_mean_pool, global_add_pool, \
     global_max_pool
 
@@ -56,13 +56,13 @@ class DGNRNetwork(nn.Module):
             output_dim=hidden_dim,
             device=self.device
         )
-        self.conv1 = GATv2Conv(
+        self.conv1 = GATConv(
             hidden_dim,
             hidden_dim,
             num_heads,
             device=self.device
         )
-        self.conv2 = GATv2Conv(
+        self.conv2 = GATConv(
             hidden_dim * num_heads,
             hidden_dim, num_heads,
             device=self.device
