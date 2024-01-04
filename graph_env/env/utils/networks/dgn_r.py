@@ -52,7 +52,7 @@ class DGNRNetwork(nn.Module):
         output_dim = output_dim if not self.use_dueling else 0
         self.encoder = MLP(
             input_dim=input_dim,
-            hidden_sizes=[512],
+            hidden_sizes=[hidden_dim],
             output_dim=hidden_dim,
             device=self.device
         )
