@@ -26,7 +26,7 @@ class DGNPolicy(DQNPolicy):
             # Get ID indices of batch active obs and intersect with valid neighbours
             active_neighbors = np.intersect1d(
                 np.where(exp.info.indices >= 0),
-                exp.obs.obs.observation[6]
+                np.append(exp.obs.obs.observation[6], int(exp.obs.agent_id))
             ).astype(int)
             valid_indices = exp.info.indices[active_neighbors]
 
