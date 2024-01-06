@@ -18,7 +18,7 @@ from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
 from tianshou.policy import BasePolicy
 from tianshou.trainer import offpolicy_trainer
-from graph_env.env.utils.policies.dgn import DGNPolicy
+from graph_env.env.utils.policies.n_dgn import DGNPolicy
 
 from torch_geometric.nn import global_max_pool, global_mean_pool, \
     global_add_pool
@@ -142,7 +142,7 @@ def get_parser() -> argparse.ArgumentParser:
 
 def get_args() -> argparse.Namespace:
     parser = get_parser().parse_known_args()[0]
-    parser.learning_algorithm = "lstm_lr_dgn"
+    parser.learning_algorithm = "lstm_l_n_dgn_r"
     return parser
 
 
@@ -225,7 +225,7 @@ def watch(
         args: argparse.Namespace = get_args(),
         masp_policy: BasePolicy = None,
 ) -> None:
-    weights_path = os.path.join(args.logdir, "mpr", "lstm_lr_dgn", "weights", f"{args.model_name}")
+    weights_path = os.path.join(args.logdir, "mpr", "lstm_l_n_dgn_r", "weights", f"{args.model_name}")
 
     env = DummyVectorEnv(
         [
@@ -345,7 +345,7 @@ def train_agent(
         writer = SummaryWriter(log_path)
         writer.add_text("args", str(args))
         logger.load(writer)
-    weights_path = os.path.join(args.logdir, "mpr", "lstm_lr_dgn", "weights")
+    weights_path = os.path.join(args.logdir, "mpr", "lstm_l_n_dgn_r", "weights")
     Path(weights_path).mkdir(parents=True, exist_ok=True)
 
     def save_best_fn(pol):
