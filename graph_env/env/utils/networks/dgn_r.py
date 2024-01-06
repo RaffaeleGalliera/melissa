@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tianshou.utils.net.common import MLP
-from torch_geometric.nn import GATConv
+from torch_geometric.nn import TransformerConv
 from torch_geometric.nn import global_mean_pool, global_add_pool, \
     global_max_pool
 
@@ -23,7 +23,7 @@ def to_pytorch_geometric_batch(obs, device):
             edge_index=torch.as_tensor(
                 observation[4],
                 device=device,
-                dtype=torch.int
+                dtype=torch.int64
             ),
             index=observation[3][0]) for observation in obs.observation
     ]
@@ -56,14 +56,18 @@ class DGNRNetwork(nn.Module):
             output_dim=hidden_dim,
             device=self.device
         )
-        self.conv1 = GATConv(
+        self.conv1 = TransformerConv(
             hidden_dim,
             hidden_dim,
             num_heads,
+            device=self.device,
+            root_weight=False
         )
-        self.conv2 = GATConv(
+        self.conv2 = TransformerConv(
             hidden_dim * num_heads,
             hidden_dim, num_heads,
+            device=self.device,
+            root_weight=False
         )
 
         q_kwargs, v_kwargs = dueling_param
