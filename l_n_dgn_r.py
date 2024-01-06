@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Tuple
 from math import pow, e, log
 
+import gym
 import gymnasium
 import numpy as np
 import optuna
@@ -16,23 +17,21 @@ from tianshou.data import VectorReplayBuffer, PrioritizedVectorReplayBuffer
 from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
 from tianshou.policy import BasePolicy
-from tianshou.trainer import OffpolicyTrainer
-
-from graph_env.env.utils.collectors.collective_experience_collector import CollectiveExperienceCollector
-from graph_env.env.utils.policies.dgn import DGNPolicy
-
+from tianshou.trainer import offpolicy_trainer
 from torch_geometric.nn import global_max_pool, global_mean_pool, \
     global_add_pool
 
 from graph_env import graph_env_v0
 from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE, \
     NUMBER_OF_FEATURES
-from tianshou.utils import WandbLogger
+from graph_env.env.utils.logger import CustomLogger
 
-from graph_env.env.utils.networks.lstm_l_dgn import RecurrentLDGNNetwork
-from graph_env.env.utils.policies.multi_agent_managers.collaborative_shared_policy import MultiAgentCollaborativeSharedPolicy
+from graph_env.env.utils.networks.l_dgn import LDGNNetwork
 
-from graph_env.env.utils.collectors.multi_agent_collector import MultiAgentCollector
+from graph_env.env.utils.policies.multi_agent_managers.collaborative_shared_policy import MultiAgentCollaborativeSharedPolicy as MultiAgentSharedPolicy
+from graph_env.env.utils.policies.n_dgn import DGNPolicy
+
+from graph_env.env.utils.collectors.collector import MultiAgentCollector
 from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
 
 import time
@@ -61,7 +60,6 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--step-per-collect", type=int, default=10)
     parser.add_argument("--update-per-step", type=float, default=0.1)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--obs-stacks", type=int, default=4)
     parser.add_argument("--training-num", type=int, default=20)
     parser.add_argument("--test-num", type=int, default=100)
     parser.add_argument("--logdir", type=str, default="log")
@@ -143,7 +141,7 @@ def get_parser() -> argparse.ArgumentParser:
 
 def get_args() -> argparse.Namespace:
     parser = get_parser().parse_known_args()[0]
-    parser.learning_algorithm = "lstm_lr_dgn"
+    parser.learning_algorithm = "l_n_dgn_r"
     return parser
 
 
@@ -169,6 +167,8 @@ def get_env(
     )
     return PettingZooEnv(env)
 
+
+
 def get_agents(
         args: argparse.Namespace = get_args(),
         policy: BasePolicy = None,
@@ -176,7 +176,7 @@ def get_agents(
 ) -> Tuple[BasePolicy, torch.optim.Optimizer, List]:
     env = get_env(number_of_agents=args.n_agents)
     observation_space = env.observation_space['observation'] if isinstance(
-        env.observation_space, (gymnasium.spaces.Dict, gymnasium.spaces.Dict)
+        env.observation_space, (gym.spaces.Dict, gymnasium.spaces.Dict)
     ) else env.observation_space
     args.state_shape = observation_space.shape or observation_space.n
     args.action_shape = env.action_space.shape or env.action_space.n
@@ -195,7 +195,7 @@ def get_agents(
         elif args.aggregator_function == "global_add_pool":
             aggregator = global_add_pool
 
-        net = RecurrentLDGNNetwork(
+        net = LDGNNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
@@ -210,15 +210,14 @@ def get_agents(
         )
 
         policy = DGNPolicy(
-            model=net,
-            optim=optim,
-            discount_factor=args.gamma,
-            estimation_step=args.n_step,
-            target_update_freq=args.target_update_freq,
-            action_space = env.action_space
+            net,
+            optim,
+            args.gamma,
+            args.n_step,
+            target_update_freq=args.target_update_freq
         ).to(args.device)
 
-    masp_policy = MultiAgentCollaborativeSharedPolicy(policy, env)
+    masp_policy = MultiAgentSharedPolicy(policy, env)
 
     return masp_policy, optim, env.agents
 
@@ -227,7 +226,7 @@ def watch(
         args: argparse.Namespace = get_args(),
         masp_policy: BasePolicy = None,
 ) -> None:
-    weights_path = os.path.join(args.logdir, "mpr", "lstm_lr_dgn", "weights", f"{args.model_name}")
+    weights_path = os.path.join(args.logdir, "mpr", "l_n_dgn_r", "weights", f"{args.model_name}")
 
     env = DummyVectorEnv(
         [
@@ -252,11 +251,11 @@ def watch(
     masp_policy.policy.eval()
     masp_policy.policy.set_eps(args.eps_test)
 
-    collector = CollectiveExperienceCollector(
-        agents_num=args.n_agents,
-        policy=masp_policy,
-        env=env,
-        exploration_noise=False
+    collector = MultiAgentCollector(
+        masp_policy,
+        env,
+        exploration_noise=False,
+        number_of_agents=args.n_agents
     )
     result = collector.collect(n_episode=args.test_num * args.n_agents)
 
@@ -298,47 +297,49 @@ def train_agent(
     train_envs.seed(args.seed)
     test_envs.seed(args.seed)
 
-    masp_policy, optim, agents = get_agents(
-        args,
-        policy=masp_policy,
-        optim=optim
-    )
+    masp_policy, optim, agents = get_agents(args, policy=masp_policy, optim=optim)
 
     train_replay_buffer = PrioritizedVectorReplayBuffer(
         args.buffer_size,
         len(train_envs) * len(agents),
         ignore_obs_next=True,
-        stack_num=args.obs_stacks,
         alpha=args.alpha,
         beta=args.beta
     ) if args.prio_buffer else VectorReplayBuffer(
         args.buffer_size,
         len(train_envs) * len(agents),
-        stack_num=args.obs_stacks,
         ignore_obs_next=True
     )
 
     # collector
-    train_collector = CollectiveExperienceCollector(
-        agents_num=len(agents),
-        policy=masp_policy,
-        env=train_envs,
-        buffer=train_replay_buffer,
-        exploration_noise=True
+    train_collector = MultiAgentCollector(
+        masp_policy,
+        train_envs,
+        train_replay_buffer,
+        exploration_noise=True,
+        number_of_agents=len(agents)
     )
-    test_collector = CollectiveExperienceCollector(agents_num=len(agents), policy=masp_policy, env=test_envs, exploration_noise=False)
-
-    train_collector.reset()
-    train_collector.collect(n_step=args.batch_size * args.training_num)
+    test_collector = MultiAgentCollector(
+        masp_policy,
+        test_envs,
+        VectorReplayBuffer(
+            args.buffer_size,
+            len(test_envs) * len(agents),
+            ignore_obs_next=True
+        ),
+        exploration_noise=False,
+        number_of_agents=len(agents)
+    )
+    # train_collector.collect(n_step=args.batch_size * args.training_num)
 
     if not args.optimize:
         # log
-        log_path = os.path.join(args.logdir, 'mpr', 'lstm_l_dgn')
-        logger = WandbLogger(project='dancing_bees', name=args.model_name)
+        log_path = os.path.join(args.logdir, 'mpr', 'dgn')
+        logger = CustomLogger(project='dancing_bees', name=args.model_name)
         writer = SummaryWriter(log_path)
         writer.add_text("args", str(args))
         logger.load(writer)
-    weights_path = os.path.join(args.logdir, "mpr", "lstm_lr_dgn", "weights")
+    weights_path = os.path.join(args.logdir, "mpr", "l_n_dgn_r", "weights")
     Path(weights_path).mkdir(parents=True, exist_ok=True)
 
     def save_best_fn(pol):
@@ -358,7 +359,7 @@ def train_agent(
     def train_fn(epoch, env_step):
         decay_factor = (1 - pow(e, (
                 log(args.eps_train_final) / (
-                args.exploration_fraction * args.epoch * args.step_per_epoch))))
+                    args.exploration_fraction * args.epoch * args.step_per_epoch))))
         eps = max(args.eps_train * (1 - decay_factor) ** env_step,
                   args.eps_train_final)
         masp_policy.policy.set_eps(eps)
@@ -374,10 +375,10 @@ def train_agent(
 
     if not args.optimize:
         # trainer
-        result = OffpolicyTrainer(
-            policy=masp_policy,
-            train_collector=train_collector,
-            test_collector=test_collector,
+        result = offpolicy_trainer(
+            masp_policy,
+            train_collector,
+            test_collector,
             max_epoch=args.epoch,
             step_per_epoch=args.step_per_epoch,
             step_per_collect=args.step_per_collect,
@@ -392,7 +393,7 @@ def train_agent(
             save_best_fn=save_best_fn,
             logger=logger
             # resume_from_log=args.resume
-        ).run()
+        )
     else:
         # optimizer
         result = offpolicy_optimizer(
@@ -435,7 +436,7 @@ def load_policy(path, args, env):
         q_param = {"hidden_sizes": args.dueling_q_hidden_sizes}
         v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
 
-        net = RecurrentLDGNNetwork(
+        net = LDGNNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
@@ -449,12 +450,11 @@ def load_policy(path, args, env):
         )
 
         policy = DGNPolicy(
-            model=net,
-            optim=optim,
-            discount_factor=args.gamma,
-            estimation_step=args.n_step,
-            target_update_freq=args.target_update_freq,
-            action_space = env.action_space
+            net,
+            optim,
+            args.gamma,
+            args.n_step,
+            target_update_freq=args.target_update_freq
         ).to(args.device)
 
         masp_policy, _, _, = get_agents(args, policy, optim)
