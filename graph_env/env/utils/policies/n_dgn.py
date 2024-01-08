@@ -30,10 +30,19 @@ class DGNPolicy(DQNPolicy):
 
         for i, exp in enumerate(batch):
             # Get ID indices of batch active obs and intersect with valid neighbours
-            active_neighbors = np.intersect1d(
-                np.where(exp.info.indices >= 0),
-                np.append(exp.obs.obs.observation[6], int(exp.obs.agent_id))
-            ).astype(int)
+            if len(exp.obs.obs.shape) == 2:
+                obs_stacked_neighbors = np.unique(np.concatenate(exp.obs.obs.observation[:, 6]))
+                stacked_neighbors_indices = np.append(obs_stacked_neighbors, int(exp.obs.agent_id[0]))
+                active_neighbors = np.intersect1d(
+                    np.where(exp.info.indices >= 0),
+                    stacked_neighbors_indices
+                ).astype(int)
+            else:
+                active_neighbors = np.intersect1d(
+                    np.where(exp.info.indices >= 0),
+                    exp.obs.obs.observation[6]
+                ).astype(int)
+
             valid_indices = exp.info.indices[active_neighbors]
 
             # Get active neighbour obs from batch filtering by obs index
