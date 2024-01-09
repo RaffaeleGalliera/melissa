@@ -189,6 +189,7 @@ class World:
         self.is_testing = is_testing
         self.pre_move_graph = None
         self.pre_move_agents = None
+        self.movement_np_random = None
         if self.is_testing:
             self.graphs = cycle(glob.glob(f"graph_topologies/testing_{self.num_agents}/*"))
         else:
@@ -364,8 +365,8 @@ class World:
 
     # Method that calculate random movement for the agents if the graph is dynamic
     def compute_random_movement(self, step):
-        ox = [step * self.np_random.uniform(-1, 1) for _ in range(self.num_agents)]
-        oy = [step * self.np_random.uniform(-1, 1) for _ in range(self.num_agents)]
+        ox = [step * self.movement_np_random.uniform(-1, 1) for _ in range(self.num_agents)]
+        oy = [step * self.movement_np_random.uniform(-1, 1) for _ in range(self.num_agents)]
         return ox, oy
 
     def reset(self):
@@ -389,6 +390,7 @@ class World:
         self.messages_transmitted = 0
         random_agent = self.agents[self.tested_agent] if self.is_testing else self.np_random.choice(self.agents)
         self.origin_agent = random_agent.id
+        self.movement_np_random = np.random.RandomState(self.np_random.integers(0, 1000))
 
         if not self.is_graph_fixed and self.is_testing:
             if self.all_agents_source:
