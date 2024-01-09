@@ -32,9 +32,10 @@ class DGNPolicy(DQNPolicy):
                     stacked_neighbors_indices
                 ).astype(int)
             else:
+                indices = np.append(exp.obs.obs.observation[6], int(exp.obs.agent_id))
                 active_neighbors = np.intersect1d(
                     np.where(exp.info.indices >= 0),
-                    exp.obs.obs.observation[6]
+                    indices
                 ).astype(int)
 
             valid_indices = exp.info.indices[active_neighbors]
