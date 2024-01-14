@@ -235,7 +235,6 @@ def watch(
                 is_scripted=args.mpr_policy,
                 is_testing=True,
                 dynamic_graph=args.dynamic_graph,
-                render_mode="human",
                 all_agents_source=True
             )
         ]
@@ -276,7 +275,8 @@ def train_agent(
         [
             lambda: get_env(
                 number_of_agents=args.n_agents,
-                dynamic_graph=args.dynamic_graph
+                dynamic_graph=args.dynamic_graph,
+                render_mode="human",
             ) for i in range(args.training_num)
         ]
     )
@@ -286,7 +286,8 @@ def train_agent(
             lambda: get_env(
                 number_of_agents=args.n_agents,
                 dynamic_graph=args.dynamic_graph,
-                is_testing=True
+                is_testing=True,
+                render_mode="human",
             )
         ]
     )

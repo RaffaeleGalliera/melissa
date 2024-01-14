@@ -190,8 +190,13 @@ class World:
         self.pre_move_graph = None
         self.pre_move_agents = None
         self.movement_np_random = None
+        self.movement_np_random_state = None
+        self.max_node_degree = constants.MAX_NODE_DEGREE
         if self.is_testing:
-            self.graphs = cycle(glob.glob(f"graph_topologies/testing_{self.num_agents}/*"))
+            if self.max_node_degree:
+                self.graphs = cycle(glob.glob(f"graph_topologies/testing_{self.num_agents}_{self.max_node_degree}max/*"))
+            else:
+                self.graphs = cycle(glob.glob(f"graph_topologies/testing_{self.num_agents}/*"))
         else:
             self.graphs = glob.glob(f"graph_topologies/training_{self.num_agents}/*")
         self.tested_agent = 0
@@ -376,9 +381,13 @@ class World:
             if self.is_testing:
                 if self.tested_agent == 0:
                     self.selected_graph = next(self.graphs)
+                    self.movement_np_random = np.random.RandomState(self.np_random.integers(0, 1000))
+                    self.movement_np_random_state = self.movement_np_random.get_state()
+                else:
+                    self.movement_np_random.set_state(self.movement_np_random_state)
             else:
                 self.selected_graph = self.np_random.choice(self.graphs, replace=True)
-            
+
             self.graph = load_graph(self.selected_graph)
 
         self.agents = [Agent(
@@ -386,11 +395,13 @@ class World:
             nx.ego_graph(self.graph, i, undirected=True),
             is_scripted=self.is_scripted
         ) for i in range(self.num_agents)]
+
+        random_agent = self.agents[self.tested_agent] if self.is_testing else self.np_random.choice(self.agents)
+        self.movement_np_random = self.movement_np_random if self.is_testing else np.random.RandomState(self.np_random.integers(0, 1000))
+
         # Includes origin message
         self.messages_transmitted = 0
-        random_agent = self.agents[self.tested_agent] if self.is_testing else self.np_random.choice(self.agents)
         self.origin_agent = random_agent.id
-        self.movement_np_random = np.random.RandomState(self.np_random.integers(0, 1000))
 
         if not self.is_graph_fixed and self.is_testing:
             if self.all_agents_source:
