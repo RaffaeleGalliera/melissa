@@ -261,21 +261,10 @@ class SingleAgentCollector(Collector):
             info=DictOfSequenceSummaryStats.from_dict(episode_info)
         )
 
-class MultiAgentCollector(SingleAgentCollector):
+class CollaborativeExperienceCollector(SingleAgentCollector):
     """
-    MultiAgentCollector enables the policies of multiple agent to interact with the environment and save their
-    experience in the replay buffer. The collector is responsible for managing the replay buffer and the
-    experience of the agents. Similarly to Collector, MultiAgentCollector handles a buffer for every environment AND
-    for every agent resulting in a VectorReplayBuffer with a buffer list of num_envs * num_agents. Each agent is
-    assigned to specific buffer_id.
-
-    As the iterations between the agents and the environment can have a stochastic order (e.g. Agent X could take three
-    actions in a row, or Agent X and Y could alternate followed by a series of Y actions. X X X X Y X Y Y Y Y.)
-    the collector, which basically takes an action on the current observation(s) and observes obs_next, will have two behaviors:
-    - If obs and obs_next belong to the same buffer_id then the current experience can be added to the buffer
-    (obs, term, trunc, done, info, obs_next).
-    - If obs and obs_next do not belong to the same buffer_id, obs is saved to a temporary dictionary with the key
-    being its buffer_id. The collector will wait the next obs_next with that buffer_id before adding obs to its buffer.
+    CollaborativeExperienceCollector extends the SingleAgentCollector to collect experiences in a collaborative multi-agent setting.
+    It differs from the MultiAgentCollector in that it saves, for every experience, the indices of the experiences of the agents that are part of that experience.
     """
 
     def __init__(self, agents_num, **kwargs):
@@ -551,8 +540,6 @@ class MultiAgentCollector(SingleAgentCollector):
                 # Else save the current experience and wait for the next obs to save the proper reward and other info
                 elif not len(self.done_agents_per_env[env_id]) == self.agents_num and not buffer_id in self.done_agents_per_env[env_id]:
                     self.temp_data[buffer_id] = copy.deepcopy(self.data[[env_idx]])
-
-
 
                 sorted_buffer_ids_per_env = sorted(self.temp_buffer_data['ready'][env_id][self.temp_buffer_data['ready'][env_id] != -1])
                 if len(sorted_buffer_ids_per_env) > 0 and sorted_buffer_ids_per_env == sorted(self.temp_buffer_data['indices_to_save'][env_id]):
