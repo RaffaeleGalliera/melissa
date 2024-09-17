@@ -1,20 +1,26 @@
-from typing import Any, Dict, List, Optional, Tuple, Union
-
+from typing import Any, Dict
+from dataclasses import dataclass
 import numpy as np
 import torch
 
-from tianshou.data import Batch, ReplayBuffer, to_torch_as
-from tianshou.policy import BasePolicy, DQNPolicy
+from tianshou.data import Batch, to_torch_as
+from tianshou.policy import DQNPolicy
 try:
     from tianshou.env.pettingzoo_env import PettingZooEnv
 except ImportError:
     PettingZooEnv = None  # type: ignore
+from tianshou.policy.base import TrainingStats
+
+
+@dataclass(kw_only=True)
+class DGNTrainingStats(TrainingStats):
+    loss: float
 
 
 class DGNPolicy(DQNPolicy):
 
     def learn(self, batch: Batch, **kwargs: Any) -> Dict[str, float]:
-        if self._target and self._iter % self._freq == 0:
+        if self._target and self._iter % self.freq == 0:
             self.sync_weight()
         self.optim.zero_grad()
         weight = batch.pop("weight", 1.0)
@@ -51,4 +57,4 @@ class DGNPolicy(DQNPolicy):
         loss.backward()
         self.optim.step()
         self._iter += 1
-        return {"loss": loss.item()}
+        return DGNTrainingStats(loss=loss.item())  # type: ignore[return-value]

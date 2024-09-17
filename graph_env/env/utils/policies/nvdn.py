@@ -1,14 +1,22 @@
-from typing import Any, Dict, List, Optional, Tuple, Union
-
+from typing import Any, Dict
+from dataclasses import dataclass
 import numpy as np
 import torch
 
-from tianshou.data import Batch, ReplayBuffer, to_torch_as
-from tianshou.policy import BasePolicy, DQNPolicy
+from tianshou.data import Batch, to_torch_as
+from tianshou.policy import DQNPolicy
 try:
     from tianshou.env.pettingzoo_env import PettingZooEnv
 except ImportError:
     PettingZooEnv = None  # type: ignore
+from tianshou.policy.base import TrainingStats
+
+
+@dataclass(kw_only=True)
+class NVDNTrainingStats(TrainingStats):
+    loss: float
+
+
 
 class NVDNPolicy(DQNPolicy):
     """VDN policy.
@@ -61,4 +69,4 @@ class NVDNPolicy(DQNPolicy):
         loss.backward()
         self.optim.step()
         self._iter += 1
-        return {"loss": loss.item()}
+        return NVDNTrainingStats(loss=loss.item())  # type: ignore[return-value]
