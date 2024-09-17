@@ -17,7 +17,7 @@ from tianshou.data import VectorReplayBuffer, PrioritizedVectorReplayBuffer
 from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 from tianshou.env.pettingzoo_env import PettingZooEnv
 from tianshou.policy import BasePolicy
-from tianshou.trainer import offpolicy_trainer
+from tianshou.trainer import OffpolicyTrainer
 from tianshou.policy.modelfree.dqn import DQNPolicy
 from torch_geometric.nn import global_max_pool, global_mean_pool, \
     global_add_pool
@@ -25,13 +25,13 @@ from torch_geometric.nn import global_max_pool, global_mean_pool, \
 from graph_env import graph_env_v0
 from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE, \
     NUMBER_OF_FEATURES
-from graph_env.env.utils.logger import CustomLogger
+from tianshou.utils import WandbLogger
 
 from graph_env.env.utils.networks.lstm_l_dgn import RecurrentLDGNNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import \
     MultiAgentSharedPolicy
 
-from graph_env.env.utils.collectors.collector import MultiAgentCollector
+from graph_env.env.utils.collectors.multi_agent_collector import MultiAgentCollector
 from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
 
 import time
@@ -208,11 +208,12 @@ def get_agents(
         )
 
         policy = DQNPolicy(
-            net,
-            optim,
-            args.gamma,
-            args.n_step,
-            target_update_freq=args.target_update_freq
+            model=net,
+            optim=optim,
+            discount_factor=args.gamma,
+            estimation_step=args.n_step,
+            target_update_freq=args.target_update_freq,
+            action_space = env.action_space
         ).to(args.device)
 
     masp_policy = MultiAgentSharedPolicy(policy, env)
@@ -249,10 +250,10 @@ def watch(
     masp_policy.policy.set_eps(args.eps_test)
 
     collector = MultiAgentCollector(
-        masp_policy,
-        env,
-        exploration_noise=False,
-        number_of_agents=args.n_agents
+        agents_num=args.n_agents,
+        policy=masp_policy,
+        env=env,
+        exploration_noise=False
     )
     result = collector.collect(n_episode=args.test_num * args.n_agents)
 
@@ -316,30 +317,21 @@ def train_agent(
 
     # collector
     train_collector = MultiAgentCollector(
-        masp_policy,
-        train_envs,
-        train_replay_buffer,
-        exploration_noise=True,
-        number_of_agents=len(agents)
+        agents_num=len(agents),
+        policy=masp_policy,
+        env=train_envs,
+        buffer=train_replay_buffer,
+        exploration_noise=True
     )
-    test_collector = MultiAgentCollector(
-        masp_policy,
-        test_envs,
-        VectorReplayBuffer(
-            args.buffer_size,
-            len(test_envs) * len(agents),
-            stack_num=args.obs_stacks,
-            ignore_obs_next=True
-        ),
-        exploration_noise=False,
-        number_of_agents=len(agents)
-    )
-    # train_collector.collect(n_step=args.batch_size * args.training_num)
+    test_collector = MultiAgentCollector(agents_num=len(agents), policy=masp_policy, env=test_envs, exploration_noise=False)
+
+    train_collector.reset()
+    train_collector.collect(n_step=args.batch_size * args.training_num)
 
     if not args.optimize:
         # log
         log_path = os.path.join(args.logdir, 'mpr', 'lstm_l_dgn')
-        logger = CustomLogger(project='dancing_bees', name=args.model_name)
+        logger = WandbLogger(project='dancing_bees', name=args.model_name)
         writer = SummaryWriter(log_path)
         writer.add_text("args", str(args))
         logger.load(writer)
@@ -379,10 +371,10 @@ def train_agent(
 
     if not args.optimize:
         # trainer
-        result = offpolicy_trainer(
-            masp_policy,
-            train_collector,
-            test_collector,
+        result = OffpolicyTrainer(
+            policy=masp_policy,
+            train_collector=train_collector,
+            test_collector=test_collector,
             max_epoch=args.epoch,
             step_per_epoch=args.step_per_epoch,
             step_per_collect=args.step_per_collect,
@@ -397,7 +389,7 @@ def train_agent(
             save_best_fn=save_best_fn,
             logger=logger
             # resume_from_log=args.resume
-        )
+        ).run()
     else:
         # optimizer
         result = offpolicy_optimizer(
@@ -454,11 +446,12 @@ def load_policy(path, args, env):
         )
 
         policy = DQNPolicy(
-            net,
-            optim,
-            args.gamma,
-            args.n_step,
-            target_update_freq=args.target_update_freq
+            model=net,
+            optim=optim,
+            discount_factor=args.gamma,
+            estimation_step=args.n_step,
+            target_update_freq=args.target_update_freq,
+            action_space = env.action_space
         ).to(args.device)
 
         masp_policy, _, _, = get_agents(args, policy, optim)

@@ -11,8 +11,7 @@ from optuna.study import StudyDirection
 from optuna.trial import TrialState
 from optuna.visualization import plot_optimization_history, plot_param_importances
 from tianshou.env import DummyVectorEnv
-from graph_env.env.utils.collectors.collector import MultiAgentCollector
-from plotly.graph_objects import Figure
+from graph_env.env.utils.collectors.multi_agent_collector import MultiAgentCollector
 
 logging.getLogger().setLevel(logging.INFO)
 
