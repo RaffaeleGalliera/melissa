@@ -71,8 +71,7 @@ class RecurrentHLDGNNetwork(nn.Module):
         self.conv1 = GATv2Conv(
             input_dim,
             hidden_dim,
-            num_heads,
-            device=self.device
+            num_heads
         )
         self.lstm = nn.LSTM(
             input_size=self.final_latent_dim,

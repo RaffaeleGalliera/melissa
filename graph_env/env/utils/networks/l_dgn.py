@@ -57,14 +57,12 @@ class LDGNNetwork(nn.Module):
         self.conv1 = GATv2Conv(
             hidden_dim,
             hidden_dim,
-            num_heads,
-            device=self.device
+            num_heads
         )
         self.conv2 = GATv2Conv(
             hidden_dim * num_heads,
             hidden_dim,
-            num_heads,
-            device=self.device
+            num_heads
         )
 
         if self.use_dueling:
