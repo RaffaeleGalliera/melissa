@@ -6,7 +6,7 @@ import numpy as np
 import time
 from tianshou.data.types import RolloutBatchProtocol
 import torch
-from collector import SingleAgentCollector, CollectStatsWithInfo, DictOfSequenceSummaryStats
+from .collector import SingleAgentCollector, CollectStatsWithInfo, DictOfSequenceSummaryStats
 from tianshou.data.buffer.vecbuf import VectorReplayBuffer
 from tianshou.data import ReplayBuffer, ReplayBufferManager, CachedReplayBuffer, PrioritizedReplayBuffer, Batch, to_numpy, SequenceSummaryStats
 
@@ -252,18 +252,18 @@ class MultiAgentCollector(SingleAgentCollector):
                     # Add data to experience to save
                     del self.temp_data[next_buffer_id]
 
-                if done[env_idx]:
-                    self.done_agents_per_env[env_id].append(next_buffer_id)
-                    if len(self.done_agents_per_env[env_id]) == self.agents_num or info[env_idx].get("explicit_reset", False):
-                        done_envs.append((env_idx, env_id))
-
                 # If obs is followed by the same agent's obs, save the experience directly
                 if buffer_id == next_buffer_id:
                     experience_to_save = Batch.cat([experience_to_save, self.data[[env_idx]]])
                     buffer_ids_to_save.append(buffer_id)
 
-                # Else save the current experience and wait for the next obs to save the proper reward and other info
-                elif not len(self.done_agents_per_env[env_id]) == self.agents_num and not buffer_id in self.done_agents_per_env[env_id]:
+                if done[env_idx]:
+                    self.done_agents_per_env[env_id].append(next_buffer_id)
+                    if len(self.done_agents_per_env[env_id]) == self.agents_num or info[env_idx].get("explicit_reset", False):
+                        done_envs.append((env_idx, env_id, len(experience_to_save)-1))
+
+                # If save the current experience and wait for the next obs to save the proper reward and other info
+                if buffer_id != next_buffer_id and not len(self.done_agents_per_env[env_id]) == self.agents_num and not buffer_id in self.done_agents_per_env[env_id]:
                     self.temp_data[buffer_id] = copy.deepcopy(self.data[[env_idx]])
 
             if len(buffer_ids_to_save) > 0:
@@ -274,12 +274,13 @@ class MultiAgentCollector(SingleAgentCollector):
             episode_info.extend(info)
 
             if len(done_envs):
-                env_ind_local = [env_idx for env_idx, _ in done_envs]
-                env_ind_global = [env_id for _, env_id in done_envs]
+                env_ind_local = [env_idx for env_idx,_ ,_ in done_envs]
+                env_ind_global = [env_id for _, env_id, _ in done_envs]
+                env_ind_experience_to_save = [env_idx for _, _, env_idx in done_envs]
                 episode_count += len(done_envs)
-                episode_lens.extend(ep_len[env_ind_local])
-                episode_returns.extend(ep_rew[env_ind_local])
-                episode_start_indices.extend(ep_idx[env_ind_local])
+                episode_lens.extend(ep_len[env_ind_experience_to_save])
+                episode_returns.extend(ep_rew[env_ind_experience_to_save])
+                episode_start_indices.extend(ep_idx[env_ind_experience_to_save])
 
                 for env_idx in env_ind_global:
                     self.done_agents_per_env[env_idx] = []
