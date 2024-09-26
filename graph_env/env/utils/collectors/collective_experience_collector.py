@@ -249,11 +249,12 @@ class CollectiveExperienceCollector(SingleAgentCollector):
             buffer_ids_to_save = []
             done_envs = []
             for env_idx, env_data in enumerate(self.data):
-                agent_id = int(env_data.obs.agent_id)
+                agent_id = int("".join(c for c in env_data.obs.agent_id if c.isdigit()))
+                next_agent_id = int("".join(c for c in env_data.obs_next.agent_id if c.isdigit()))
                 env_id = env_data.info.env_id
                 env_info = env_data.info
                 buffer_id = env_id * self.agents_num + agent_id
-                next_buffer_id = env_id * self.agents_num + int(env_data.obs_next.agent_id)
+                next_buffer_id = env_id * self.agents_num + next_agent_id
 
                 assert self.temp_buffer_data['filling'][env_id][agent_id] == -1, "The buffer_id should be -1 as it shouldn't have been filled before."
                 # Avoid marking as filling if the agent is done

@@ -228,10 +228,10 @@ class MultiAgentCollector(SingleAgentCollector):
 
             # Calculate buffer_ids based on current batch's env_ids and agent_ids
             # TODO: change the agent_ids ('agent_num' str to agent_id str)
-            agent_id = [int(agent_num) for agent_num in self.data.obs.agent_id]
+            agent_id = [int("".join(c for c in agent_num if c.isdigit())) for agent_num in self.data.obs.agent_id]
             buffer_ids = (self.data.info.env_id * self.agents_num) + agent_id
 
-            next_agent_id = [int(agent_num) for agent_num in self.data.obs_next.agent_id]
+            next_agent_id = [int("".join(c for c in agent_num if c.isdigit())) for agent_num in self.data.obs_next.agent_id]
             next_buffer_ids = (self.data.info.env_id * self.agents_num) + next_agent_id
 
             experience_to_save = Batch()
