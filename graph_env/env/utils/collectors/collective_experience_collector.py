@@ -75,7 +75,8 @@ class CollectiveExperienceCollector(SingleAgentCollector):
         if resync_rews:
             rews = np.full(self.agents_num, 0, dtype=np.float32)
             for idx, agent_id in enumerate(self.temp_buffer_data['exps_to_save'][env_id].obs.agent_id):
-                rews[int(agent_id)] = self.temp_buffer_data['exps_to_save'][env_id][idx].rew[int(agent_id)]
+                agent_id = int("".join(c for c in agent_id if c.isdigit()))
+                rews[agent_id] = self.temp_buffer_data['exps_to_save'][env_id][idx].rew[agent_id]
             rews_matrix = np.array([rews for _ in range(len(self.temp_buffer_data['exps_to_save'][env_id]))])
             self.temp_buffer_data['exps_to_save'][env_id].update(rew=rews_matrix)
 
