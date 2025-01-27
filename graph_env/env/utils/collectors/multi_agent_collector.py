@@ -96,11 +96,11 @@ class MultiAgentCollector(SingleAgentCollector):
             gym_render_kwargs: dict[str, Any] | None = None,
     ) -> CollectStatsWithInfo:
         """
-        Collect a specified number of step or episode and saves them in the proper buffer based on the env id and agent id.
+        Collect a specified number of step or episode and saves them in the proper buffer based on the envs id and agent id.
 
         To ensure unbiased sampling result with n_episode option, this function will
         first collect ``n_episode - env_num`` episodes, then for the last ``env_num``
-        episodes, they will be collected evenly from each env.
+        episodes, they will be collected evenly from each envs.
 
         Args:
             n_step (int | None): How many steps you want to collect.
@@ -125,7 +125,7 @@ class MultiAgentCollector(SingleAgentCollector):
             assert n_step > 0
             if n_step % self.env_num != 0:
                 warnings.warn(
-                    f"n_step={n_step} is not a multiple of #env ({self.env_num}), "
+                    f"n_step={n_step} is not a multiple of #envs ({self.env_num}), "
                     "which may cause extra transitions collected into the buffer.",
                 )
             ready_env_ids = np.arange(self.env_num)
@@ -148,7 +148,7 @@ class MultiAgentCollector(SingleAgentCollector):
         episode_start_indices: list[int] = []
         episode_info: list[dict[str, Any]] = []
         while True:
-            assert len(self.data) == len(ready_env_ids), "Data should have one entry for each env id."
+            assert len(self.data) == len(ready_env_ids), "Data should have one entry for each envs id."
 
             # restore the state (if any)
             last_state = self.data.policy.pop("hidden_state", None)
@@ -157,7 +157,7 @@ class MultiAgentCollector(SingleAgentCollector):
             if random:
                 try:
                     act_sample = [self._action_space[i].sample() for i in ready_env_ids]
-                except TypeError:  # envpool's action space is not for per-env
+                except TypeError:  # envpool's action space is not for per-envs
                     act_sample = [self._action_space.sample() for _ in ready_env_ids]
                 act_sample = self.policy.map_action_inverse(act_sample)  # type: ignore
                 self.data.update(act=act_sample)
@@ -228,7 +228,7 @@ class MultiAgentCollector(SingleAgentCollector):
 
             # Calculate buffer_ids based on current batch's env_ids and agent_ids
             # TODO: change the agent_ids ('agent_num' str to agent_id str)
-            agent_id = [int("".join(c for c in agent_num if c.isdigit())) for agent_num in self.data.obs.agent_id]
+            agent_id =  [int("".join(c for c in agent_num if c.isdigit())) for agent_num in self.data.obs.agent_id]
             buffer_ids = (self.data.info.env_id * self.agents_num) + agent_id
 
             next_agent_id = [int("".join(c for c in agent_num if c.isdigit())) for agent_num in self.data.obs_next.agent_id]
@@ -250,12 +250,13 @@ class MultiAgentCollector(SingleAgentCollector):
                     experience_to_save = Batch.cat([experience_to_save, self.temp_data[next_buffer_id]])
                     buffer_ids_to_save.append(next_buffer_id)
                     # Add data to experience to save
-                    del self.temp_data[next_buffer_id]
+                    self.temp_data.pop(next_buffer_id)
 
                 # If obs is followed by the same agent's obs, save the experience directly
                 if buffer_id == next_buffer_id:
                     experience_to_save = Batch.cat([experience_to_save, self.data[[env_idx]]])
                     buffer_ids_to_save.append(buffer_id)
+                    # TODO: double check if we need to pop the next buffer id (like in Collective Exp. Collector)
 
                 if done[env_idx]:
                     self.done_agents_per_env[env_id].append(next_buffer_id)
@@ -269,8 +270,9 @@ class MultiAgentCollector(SingleAgentCollector):
             if len(buffer_ids_to_save) > 0:
                 ptr, ep_rew, ep_len, ep_idx = self.buffer.add(experience_to_save, buffer_ids=buffer_ids_to_save)
 
-            # Collect stats
-            step_count += len(ready_env_ids)  # How many envs have stepped
+                # Collect stats
+                step_count += len(buffer_ids_to_save)  # How many envs have stepped all the agents
+
             episode_info.extend(info)
 
             if len(done_envs):

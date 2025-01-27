@@ -53,7 +53,7 @@ class SingleAgentCollector(Collector):
 
         To ensure unbiased sampling result with n_episode option, this function will
         first collect ``n_episode - env_num`` episodes, then for the last ``env_num``
-        episodes, they will be collected evenly from each env.
+        episodes, they will be collected evenly from each envs.
 
         Args:
             n_step (int | None): How many steps you want to collect.
@@ -89,7 +89,7 @@ class SingleAgentCollector(Collector):
             assert n_step > 0
             if n_step % self.env_num != 0:
                 warnings.warn(
-                    f"n_step={n_step} is not a multiple of #env ({self.env_num}), "
+                    f"n_step={n_step} is not a multiple of #envs ({self.env_num}), "
                     "which may cause extra transitions collected into the buffer.",
                 )
             ready_env_ids = np.arange(self.env_num)
@@ -120,7 +120,7 @@ class SingleAgentCollector(Collector):
             if random:
                 try:
                     act_sample = [self._action_space[i].sample() for i in ready_env_ids]
-                except TypeError:  # envpool's action space is not for per-env
+                except TypeError:  # envpool's action space is not for per-envs
                     act_sample = [self._action_space.sample() for _ in ready_env_ids]
                 act_sample = self.policy.map_action_inverse(act_sample)  # type: ignore
                 self.data.update(act=act_sample)
@@ -143,7 +143,7 @@ class SingleAgentCollector(Collector):
 
             # get bounded and remapped actions first (not saved into buffer)
             action_remap = self.policy.map_action(self.data.act)
-            # step in env
+            # step in envs
 
             obs_next, rew, terminated, truncated, info = self.env.step(
                 action_remap,
@@ -198,7 +198,7 @@ class SingleAgentCollector(Collector):
                 for i in env_ind_local:
                     self._reset_state(i)
 
-                # remove surplus env id from ready_env_ids
+                # remove surplus envs id from ready_env_ids
                 # to avoid bias in selecting environments
                 if n_episode:
                     surplus_env_num = len(ready_env_ids) - (n_episode - episode_count)

@@ -69,14 +69,13 @@ class CollectiveExperienceCollector(SingleAgentCollector):
 
     def _add_extra_info(self, env_id: int, resync_rews=False) -> None:
         buffer_ids = self.temp_buffer_data['ready'][env_id][:]
-        indices = [self.buffer.buffers[buffer_id].last_index[0] + self.buffer._offset[buffer_id] if buffer_id != -1 else -1 for buffer_id in buffer_ids]
+        indices = [self.buffer.buffers[buffer_id]._index + self.buffer._offset[buffer_id] if buffer_id != -1 else -1 for buffer_id in buffer_ids]
         indices_matrix = np.array([indices for _ in range(len(self.temp_buffer_data['exps_to_save'][env_id]))])
         self.temp_buffer_data['exps_to_save'][env_id].info.update(indices=indices_matrix)
         if resync_rews:
             rews = np.full(self.agents_num, 0, dtype=np.float32)
             for idx, agent_id in enumerate(self.temp_buffer_data['exps_to_save'][env_id].obs.agent_id):
-                agent_id = int("".join(c for c in agent_id if c.isdigit()))
-                rews[agent_id] = self.temp_buffer_data['exps_to_save'][env_id][idx].rew[agent_id]
+                rews[int(agent_id)] = self.temp_buffer_data['exps_to_save'][env_id][idx].rew[int(agent_id)]
             rews_matrix = np.array([rews for _ in range(len(self.temp_buffer_data['exps_to_save'][env_id]))])
             self.temp_buffer_data['exps_to_save'][env_id].update(rew=rews_matrix)
 
@@ -113,11 +112,11 @@ class CollectiveExperienceCollector(SingleAgentCollector):
             gym_render_kwargs: dict[str, Any] | None = None,
     ) -> CollectStatsWithInfo:
         """
-        Collect a specified number of step or episode and saves them in the proper buffer based on the env id and agent id.
+        Collect a specified number of step or episode and saves them in the proper buffer based on the envs id and agent id.
 
         To ensure unbiased sampling result with n_episode option, this function will
         first collect ``n_episode - env_num`` episodes, then for the last ``env_num``
-        episodes, they will be collected evenly from each env.
+        episodes, they will be collected evenly from each envs.
 
         Args:
             n_step (int | None): How many steps you want to collect.
@@ -142,7 +141,7 @@ class CollectiveExperienceCollector(SingleAgentCollector):
             assert n_step > 0
             if n_step % self.env_num != 0:
                 warnings.warn(
-                    f"n_step={n_step} is not a multiple of #env ({self.env_num}), "
+                    f"n_step={n_step} is not a multiple of #envs ({self.env_num}), "
                     "which may cause extra transitions collected into the buffer.",
                 )
             ready_env_ids = np.arange(self.env_num)
@@ -165,7 +164,7 @@ class CollectiveExperienceCollector(SingleAgentCollector):
         episode_start_indices: list[int] = []
         episode_info: list[dict[str, Any]] = []
         while True:
-            assert len(self.data) == len(ready_env_ids), "Data should have one entry for each env id."
+            assert len(self.data) == len(ready_env_ids), "Data should have one entry for each envs id."
 
             # restore the state (if any)
             last_state = self.data.policy.pop("hidden_state", None)
@@ -174,7 +173,7 @@ class CollectiveExperienceCollector(SingleAgentCollector):
             if random:
                 try:
                     act_sample = [self._action_space[i].sample() for i in ready_env_ids]
-                except TypeError:  # envpool's action space is not for per-env
+                except TypeError:  # envpool's action space is not for per-envs
                     act_sample = [self._action_space.sample() for _ in ready_env_ids]
                 act_sample = self.policy.map_action_inverse(act_sample)  # type: ignore
                 self.data.update(act=act_sample)
@@ -279,7 +278,7 @@ class CollectiveExperienceCollector(SingleAgentCollector):
                     self.temp_buffer_data['exps_to_save'][env_id] = Batch.cat([self.temp_buffer_data['exps_to_save'][env_id], self.temp_data[next_buffer_id]])
                     assert next_buffer_id not in self.temp_buffer_data['buffer_ids_to_save'][env_id], "The buffer_id should not be in the buffer_ids_to_save list."
                     self.temp_buffer_data['buffer_ids_to_save'][env_id].append(next_buffer_id)
-                    del self.temp_data[next_buffer_id]
+                    self.temp_data.pop(next_buffer_id)
 
                 # If obs is followed by the same agent's obs, save the experience directly
                 if buffer_id == next_buffer_id:
@@ -287,13 +286,14 @@ class CollectiveExperienceCollector(SingleAgentCollector):
                     self.temp_buffer_data['exps_to_save'][env_id] = Batch.cat([self.temp_buffer_data['exps_to_save'][env_id], self.temp_data[buffer_id]])
                     assert buffer_id not in self.temp_buffer_data['buffer_ids_to_save'][env_id], "The buffer_id should not be in the buffer_ids_to_save list."
                     self.temp_buffer_data['buffer_ids_to_save'][env_id].append(buffer_id)
-                    del self.temp_data[buffer_id]
+                    self.temp_data.pop(buffer_id)
 
                 sorted_buffer_ids_per_env = sorted(self.temp_buffer_data['ready'][env_id][self.temp_buffer_data['ready'][env_id] != -1])
                 if len(sorted_buffer_ids_per_env) > 0 and sorted_buffer_ids_per_env == sorted(self.temp_buffer_data['buffer_ids_to_save'][env_id]):
                     self._add_extra_info(env_id)
                     experience_to_save = Batch.cat([experience_to_save, self.temp_buffer_data['exps_to_save'][env_id]])
                     buffer_ids_to_save.extend(self.temp_buffer_data['buffer_ids_to_save'][env_id])
+                    step_count += 1 # Everyone stepped on this environment so we increase step count
                     self.temp_buffer_data['exps_to_save'][env_id] = Batch()
                     self.temp_buffer_data['buffer_ids_to_save'][env_id] = []
                     self.temp_buffer_data['ready'][env_id] = np.full(self.agents_num, -1, dtype=np.int64)
@@ -311,35 +311,41 @@ class CollectiveExperienceCollector(SingleAgentCollector):
             if len(buffer_ids_to_save) > 0:
                 ptr, ep_rew, ep_len, ep_idx = self.buffer.add(experience_to_save, buffer_ids=buffer_ids_to_save)
 
-            # Collect stats
-            step_count += len(ready_env_ids)  # How many envs have stepped
             episode_info.extend(info)
 
             if len(done_envs):
+                # Extract indices
                 env_ind_local = [env_idx for env_idx, _, _ in done_envs]
                 env_ind_global = [env_id for _, env_id, _ in done_envs]
-                env_ind_experience_to_save = [env_idx for _, _, env_idx in done_envs]
+                env_ind_experience_to_save = [exp_idx for _, _, exp_idx in done_envs]
+
+                # Sort env_ind_local to ensure consistent indexing
+                env_ind_local = sorted(env_ind_local)
+
+                # Update episode stats
                 episode_count += len(done_envs)
                 episode_lens.extend(ep_len[env_ind_experience_to_save])
                 episode_returns.extend(ep_rew[env_ind_experience_to_save])
                 episode_start_indices.extend(ep_idx[env_ind_experience_to_save])
 
-                for env_idx in env_ind_global:
-                    self.done_agents_per_env[env_idx] = []
-                    self.temp_buffer_data['ready'][env_idx] = np.full(self.agents_num, -1, dtype=np.int64)
-                    self.temp_buffer_data['filling'][env_idx] = np.full(self.agents_num, -1, dtype=np.int64)
+                # Reset environment-related structures for the finished envs
+                for env_id in env_ind_global:
+                    self.done_agents_per_env[env_id] = []
+                    self.temp_buffer_data['ready'][env_id] = np.full(self.agents_num, -1, dtype=np.int64)
+                    self.temp_buffer_data['filling'][env_id] = np.full(self.agents_num, -1, dtype=np.int64)
 
-                # Now we copy obs_next to obs, but sincere might be finished episodes, we reset finished episodes first.
+                # First, reset the environments and internal states before removing them from ready_env_ids
                 self._reset_env_with_ids(env_ind_local, env_ind_global, gym_render_kwargs)
                 for i in env_ind_local:
                     self._reset_state(i)
 
-                # Remove finished envs from ready_env_ids to avoid bias in selecting envs.
+                # Now remove finished envs from ready_env_ids and self.data if using n_episode
                 if n_episode:
                     surplus_env_num = len(ready_env_ids) - (n_episode - episode_count)
                     if surplus_env_num > 0:
                         mask = np.ones_like(ready_env_ids, dtype=bool)
-                        mask[env_ind_local[:surplus_env_num]] = False
+                        # We can safely index since env_ind_local is sorted and corresponds to ready_env_ids
+                        mask[np.array(env_ind_local[:surplus_env_num])] = False
                         ready_env_ids = ready_env_ids[mask]
                         self.data = self.data[mask]
 
