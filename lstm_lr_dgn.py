@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import List, Tuple
 from math import pow, e, log
 
-import gym
 import gymnasium
 import numpy as np
 import optuna
@@ -176,7 +175,7 @@ def get_agents(
 ) -> Tuple[BasePolicy, torch.optim.Optimizer, List]:
     env = get_env(number_of_agents=args.n_agents)
     observation_space = env.observation_space['observation'] if isinstance(
-        env.observation_space, (gym.spaces.Dict, gymnasium.spaces.Dict)
+        env.observation_space, (gymnasium.spaces.Dict, gymnasium.spaces.Dict)
     ) else env.observation_space
     args.state_shape = observation_space.shape or observation_space.n
     args.action_shape = env.action_space.shape or env.action_space.n
