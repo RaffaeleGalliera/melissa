@@ -1,5 +1,7 @@
 import functools
 import logging
+from typing import TypeVar
+ActionType = TypeVar("ActionType")
 
 import gymnasium
 import networkx as nx
@@ -132,18 +134,30 @@ class GraphEnv(AECEnv):
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
 
+    def get_info(self, agent: str):
+        return {
+            "logger_stats": {
+                'total_messages_transmitted': self.world.messages_transmitted,
+                'coverage': sum([1 for agent in self.world.agents if sum(agent.state.received_from) or agent.state.message_origin]) / self.world.num_agents,
+                'messages_sent': sum([agent.messages_transmitted for agent in self.world.agents]),
+                'messages_received': sum([sum(agent.state.received_from) for agent in self.world.agents]),
+                'n_neighbours': sum([sum(agent.one_hop_neighbours_ids) for agent in self.world.agents])
+            },
+        }
+
     def observe(self, agent: str):
-        if all(value for key, value in self.terminations.items() if
-               key in self.agents) and len(self.agents) == 1:
-            self.infos[self.agents[0]] = {
-                'reset_all': True,
-                'messages_transmitted': self.world.messages_transmitted,
-                'coverage': sum([1 for agent in self.world.agents if sum(agent.state.received_from) or agent.state.message_origin]) / self.world.num_agents}
+        self.infos[agent]['env_step'] = self.num_moves
+        self.infos[agent]['environment_step'] = False
+        self.infos[agent]["explicit_reset"] = False
+
+        if all(value for key, value in self.terminations.items() if key in self.agents) and len(self.agents) == 1:
             self.is_new_round = False
+            self.infos[agent]["explicit_reset"] = True
+
 
         # Todo: Need to fix resetting of the environment doesn't issue environment_step
         if self.is_new_round:
-            self.infos[self.agent_selection]['environment_step'] = True
+            self.infos[agent]['environment_step'] = True
             self.is_new_round = False
 
         return self.observation(
@@ -218,15 +232,49 @@ class GraphEnv(AECEnv):
         self.agent_selection = self._agent_selector.next()
         self.current_actions = [None] * self.number_of_agents
 
-    # Tianshou PettingZoo Wrapper returns the reward of every agent in a single
-    # time not using CumulativeReward
+    def _was_dead_step(self, action: ActionType) -> None:
+        """
+        Same default was_dead_step method used by PettingZoo, but avoids to clear rewards for all agents at the end.
+        """
+        if action is not None:
+            raise ValueError("when an agent is dead, the only valid action is None")
+
+        # removes dead agent
+        agent = self.agent_selection
+        assert (
+            self.terminations[agent] or self.truncations[agent]
+        ), "an agent that was not dead as attempted to be removed"
+        del self.terminations[agent]
+        del self.truncations[agent]
+        del self.rewards[agent]
+        del self._cumulative_rewards[agent]
+        del self.infos[agent]
+        self.agents.remove(agent)
+
+        # finds next dead agent or loads next live agent (Stored in _skip_agent_selection)
+        _deads_order = [
+            agent
+            for agent in self.agents
+            if (self.terminations[agent] or self.truncations[agent])
+        ]
+        if _deads_order:
+            if getattr(self, "_skip_agent_selection", None) is None:
+                self._skip_agent_selection = self.agent_selection
+            self.agent_selection = _deads_order[0]
+        else:
+            if getattr(self, "_skip_agent_selection", None) is not None:
+                assert self._skip_agent_selection is not None
+                self.agent_selection = self._skip_agent_selection
+            self._skip_agent_selection = None
+
+    # Tianshou PettingZoo Wrapper returns the reward of every agent altogether (not using CumulativeReward)
     def step(self, action):
         if (
                 self.terminations[self.agent_selection]
                 or self.truncations[self.agent_selection]
         ):
-            self._was_dead_step(None)
             self._agent_selector.disable(self.agent_selection)
+            self._was_dead_step(None)
             return
         current_agent = self.agent_selection
 
@@ -240,10 +288,8 @@ class GraphEnv(AECEnv):
         # for (because it was returned by last()), so the _cumulative_rewards
         # for this agent should start again at 0
         self._cumulative_rewards[current_agent] = 0
-
         self.agent_selection = self._agent_selector.next()
         if not self.agent_selection:
-            self.infos[current_agent] = {}
             self._accumulate_rewards()
             self._clear_rewards()
             self._execute_world_step()
@@ -283,6 +329,7 @@ class GraphEnv(AECEnv):
             if self.render_mode == 'human':
                 self.render()
 
+        self.infos[self.agent_selection] = self.get_info(self.agent_selection)
         self._deads_step_first()
 
     def _execute_world_step(self):

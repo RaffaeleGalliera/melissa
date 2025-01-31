@@ -60,12 +60,10 @@ class DGNRNetwork(nn.Module):
             hidden_dim,
             hidden_dim,
             num_heads,
-            device=self.device
         )
         self.conv2 = GATv2Conv(
             hidden_dim * num_heads,
             hidden_dim, num_heads,
-            device=self.device
         )
 
         q_kwargs, v_kwargs = dueling_param

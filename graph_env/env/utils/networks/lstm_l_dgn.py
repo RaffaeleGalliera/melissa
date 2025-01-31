@@ -71,20 +71,17 @@ class RecurrentLDGNNetwork(nn.Module):
         self.encoder = MLP(
             input_dim=input_dim,
             hidden_sizes=[hidden_dim],
-            output_dim=hidden_dim,
-            device=self.device
+            output_dim=hidden_dim
         )
         self.conv1 = GATv2Conv(
             hidden_dim,
             hidden_dim,
-            num_heads,
-            device=self.device
+            num_heads
         )
         self.conv2 = GATv2Conv(
             hidden_dim * num_heads,
             hidden_dim,
-            num_heads,
-            device=self.device
+            num_heads
         )
         self.lstm = nn.LSTM(
             input_size=self.final_latent_dim,
