@@ -2,7 +2,6 @@ import argparse
 import os
 import pprint
 import time
-import warnings
 from math import e, log, pow
 from pathlib import Path
 from typing import List, Tuple
@@ -23,7 +22,7 @@ from tianshou.trainer import OffpolicyTrainer
 from tianshou.utils import WandbLogger
 
 from graph_env.env.utils.constants import NUMBER_OF_FEATURES
-from graph_env.env.utils.networks.hl_dgn import HLDGNNetwork
+from graph_env.env.utils.networks.gru_l_dgn import RecurrentLDGNNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
 from graph_env.env.utils.collectors.multi_agent_collector import MultiAgentCollector
 from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
@@ -55,7 +54,7 @@ def get_agents(
         v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
 
         # Create network
-        net = HLDGNNetwork(
+        net = RecurrentLDGNNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
@@ -300,7 +299,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
     v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
 
     # Build the same network used in training
-    net = HLDGNNetwork(
+    net = RecurrentLDGNNetwork(
         NUMBER_OF_FEATURES,
         args.hidden_emb,
         args.action_shape,
@@ -331,7 +330,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
 
 if __name__ == '__main__':
     args = get_args()
-    args.algorithm = "hl_dgn"
+    args.algorithm = "gru_l_dgn"
     if args.watch:
         watch(args)
 

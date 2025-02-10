@@ -25,15 +25,25 @@ class DGNPolicy(DQNPolicy):
         self.optim.zero_grad()
         weight = batch.pop("weight", 1.0)
         device = 'cuda' if torch.cuda.is_available() else None
-        partial_loss = torch.zeros((len(batch),), device=device)
-        td_error = torch.zeros((len(batch),), device=device)
+        batch_q = torch.zeros((len(batch),), device=device)
+        batch_returns = torch.zeros((len(batch),), device=device)
 
         for i, exp in enumerate(batch):
             # Get ID indices of batch active obs and intersect with valid neighbours
-            active_neighbors = np.intersect1d(
-                np.where(exp.info.indices >= 0),
-                exp.obs.obs.observation[1]
-            ).astype(int)
+            if len(exp.obs.obs.shape) == 2:
+                obs_stacked_neighbors = np.unique(np.concatenate(exp.obs.obs.observation[:, 6]))
+                stacked_neighbors_indices = np.append(obs_stacked_neighbors, int(exp.obs.agent_id[0]))
+                active_neighbors = np.intersect1d(
+                    np.where(exp.info.indices >= 0),
+                    stacked_neighbors_indices
+                ).astype(int)
+            else:
+                indices = np.append(exp.obs.obs.observation[6], int(exp.obs.agent_id))
+                active_neighbors = np.intersect1d(
+                    np.where(exp.info.indices >= 0),
+                    indices
+                ).astype(int)
+
             valid_indices = exp.info.indices[active_neighbors]
 
             # Get active neighbour obs from batch filtering by obs index
@@ -48,10 +58,13 @@ class DGNPolicy(DQNPolicy):
             q = q[np.arange(len(q)), neighbour_obs.act]
 
             returns = to_torch_as(neighbour_obs.returns.flatten(), q)
-            partial_loss[i] = ((returns - q).pow(2)).mean()
-            td_error[i] = (returns - q).mean()
+            sum_q = q.sum()
+            sum_returns = returns.sum()
+            batch_q[i] = sum_q
+            batch_returns[i] = sum_returns
 
-        loss = (partial_loss * weight).mean()
+        td_error = batch_returns - batch_q
+        loss = (td_error.pow(2) * weight).mean()
 
         batch.weight = td_error # prio-buffer
         loss.backward()

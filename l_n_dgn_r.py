@@ -18,14 +18,16 @@ from tianshou.data import (
     PrioritizedVectorReplayBuffer
 )
 from tianshou.env import DummyVectorEnv, SubprocVectorEnv
-from tianshou.policy import BasePolicy, DQNPolicy
+from tianshou.policy import BasePolicy
 from tianshou.trainer import OffpolicyTrainer
 from tianshou.utils import WandbLogger
 
+
 from graph_env.env.utils.constants import NUMBER_OF_FEATURES
-from graph_env.env.utils.networks.hl_dgn import HLDGNNetwork
-from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
-from graph_env.env.utils.collectors.multi_agent_collector import MultiAgentCollector
+from graph_env.env.utils.policies.n_dgn import DGNPolicy
+from graph_env.env.utils.networks.l_dgn import LDGNNetwork
+from graph_env.env.utils.policies.multi_agent_managers.collaborative_shared_policy import MultiAgentCollaborativeSharedPolicy
+from graph_env.env.utils.collectors.collective_experience_collector import CollectiveExperienceCollector
 from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
 
 from common import get_args, get_env, select_aggregator
@@ -36,7 +38,7 @@ def get_agents(
     optim: torch.optim.Optimizer = None
 ) -> Tuple[BasePolicy, torch.optim.Optimizer, List[str]]:
     """
-    Build or return the MultiAgentSharedPolicy, the optimizer, and list of agents.
+    Build or return the MultiAgentCollaborativeSharedPolicy, the optimizer, and list of agents.
     """
     env = get_env(number_of_agents=args.n_agents)
     observation_space = env.observation_space['observation'] if isinstance(
@@ -55,7 +57,7 @@ def get_agents(
         v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
 
         # Create network
-        net = HLDGNNetwork(
+        net = LDGNNetwork(
             NUMBER_OF_FEATURES,
             args.hidden_emb,
             args.action_shape,
@@ -69,7 +71,7 @@ def get_agents(
         optim = torch.optim.Adam(net.parameters(), lr=args.lr)
 
         # Policy
-        policy = DQNPolicy(
+        policy = DGNPolicy(
             model=net,
             optim=optim,
             discount_factor=args.gamma,
@@ -78,7 +80,7 @@ def get_agents(
             action_space=env.action_space  # If discrete, Tianshou automatically handles that
         ).to(args.device)
 
-    masp_policy = MultiAgentSharedPolicy(policy, env)
+    masp_policy = MultiAgentCollaborativeSharedPolicy(policy, env)
     return masp_policy, optim, env.agents
 
 
@@ -115,7 +117,7 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
     masp_policy.policy.set_eps(args.eps_test)
 
     # Create collector in watch mode
-    collector = MultiAgentCollector(
+    collector = CollectiveExperienceCollector(
         agents_num=args.n_agents,
         policy=masp_policy,
         env=env,
@@ -179,14 +181,14 @@ def train_agent(
         )
 
     # Collectors
-    train_collector = MultiAgentCollector(
+    train_collector = CollectiveExperienceCollector(
         agents_num=len(agents),
         policy=masp_policy,
         env=train_envs,
         buffer=replay_buffer,
         exploration_noise=True
     )
-    test_collector = MultiAgentCollector(
+    test_collector = CollectiveExperienceCollector(
         agents_num=len(agents),
         policy=masp_policy,
         env=test_envs,
@@ -300,7 +302,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
     v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
 
     # Build the same network used in training
-    net = HLDGNNetwork(
+    net = LDGNNetwork(
         NUMBER_OF_FEATURES,
         args.hidden_emb,
         args.action_shape,
@@ -311,7 +313,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
     )
 
     optim = torch.optim.Adam(net.parameters(), lr=args.lr)
-    policy = DQNPolicy(
+    policy = DGNPolicy(
         model=net,
         optim=optim,
         discount_factor=args.gamma,
@@ -320,7 +322,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         action_space=env.action_space
     ).to(args.device)
 
-    # Wrap in MultiAgentSharedPolicy
+    # Wrap in MultiAgentCollaborativeSharedPolicy
     masp_policy, _, _ = get_agents(args, policy, optim)
 
     # Load weights
@@ -331,7 +333,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
 
 if __name__ == '__main__':
     args = get_args()
-    args.algorithm = "hl_dgn"
+    args.algorithm = "l_n_dgn_r"
     if args.watch:
         watch(args)
 

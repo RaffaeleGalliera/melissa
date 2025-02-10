@@ -38,7 +38,8 @@ class GraphEnv(AECEnv):
             is_scripted=False,
             is_testing=False,
             random_graph=False,
-            dynamic_graph=False
+            dynamic_graph=False,
+            all_agents_source=False
     ):
         super().__init__()
         self.seed()
@@ -57,7 +58,8 @@ class GraphEnv(AECEnv):
                            is_scripted=is_scripted,
                            is_testing=is_testing,
                            random_graph=random_graph,
-                           dynamic_graph=dynamic_graph)
+                           dynamic_graph=dynamic_graph,
+                           all_agents_source=all_agents_source)
 
         # Needs to be a string for assertions check in tianshou
         self.agents = [agent.name for agent in self.world.agents]
@@ -388,13 +390,13 @@ class GraphEnv(AECEnv):
 
         reward = agent.two_hop_cover / len(two_hop_neighbor_indices)
         if agent.action:
-            penalty_1 = sum([1 for index in one_hop_neighbor_indices if self.world.agents[index].action]) / len(one_hop_neighbor_indices)
+            penalty_1 = sum([1 for index in one_hop_neighbor_indices if self.world.agents[index].messages_transmitted > 0]) / len(one_hop_neighbor_indices)
             reward = reward - penalty_1
-        if not sum(agent.state.transmitted_to):
+        else:
             uncovered_n_lens = [len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if
                                 sum(self.world.agents[index].state.received_from) == 0
                                 and self.world.agents[index].state.message_origin == 0]
-            penalty_2 = max(uncovered_n_lens) if len(uncovered_n_lens) else 0
+            penalty_2 = max(uncovered_n_lens)/sum(uncovered_n_lens) if len(uncovered_n_lens) else 0
             reward = reward - penalty_2
 
         return reward
