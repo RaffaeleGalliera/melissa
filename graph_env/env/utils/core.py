@@ -81,6 +81,7 @@ class State:
         self.message_origin = 0
         # Used for memory-less MPR heuristic
         self.has_taken_action = 0
+        self.carried_topic = None
 
     def reset(self, num_agents):
         self.received_from = np.zeros(num_agents)
@@ -88,18 +89,23 @@ class State:
         self.relays_for = np.zeros(num_agents)
         self.relayed_by = np.zeros(num_agents)
         self.message_origin = 0
+        self.has_taken_action = 0
+        self.carried_topic = -1
 
 
 class Agent:
-    def __init__(self,
-                 agent_id,
-                 local_view,
-                 size=0.05,
-                 color=(0, 0, 0),
-                 state=None,
-                 pos=None,
-                 one_hop_neighbors_ids=None,
-                 is_scripted=False):
+    def __init__(
+            self,
+            agent_id,
+            local_view,
+            size=0.05,
+            color=(0, 0, 0),
+            state=None,
+            pos=None,
+            one_hop_neighbors_ids=None,
+            is_scripted=False,
+            topic_of_interest=None
+        ):
         # state
         self.id = agent_id
         self.name = str(agent_id)
@@ -122,6 +128,7 @@ class Agent:
         self.truncated = None
         self.messages_transmitted = 0
         self.actions_history = np.zeros((4,))
+        self.topic_of_interest = topic_of_interest
 
     def reset(self, local_view, pos, one_hop_neighbours_ids):
         self.__init__(
@@ -130,7 +137,8 @@ class Agent:
             state=self.state,
             pos=pos,
             one_hop_neighbors_ids=one_hop_neighbours_ids,
-            is_scripted=self.is_scripted
+            is_scripted=self.is_scripted,
+            topic_of_interest=self.topic_of_interest
         )
 
     def update_local_view(self, local_view):
@@ -157,9 +165,7 @@ class Agent:
         self.two_hop_cover = new_two_hop_cover
 
 
-# In this world the agents select if they are on the MPR set or not
 class World:
-    # update state of the world
     def __init__(
             self,
             number_of_agents,
@@ -200,6 +206,11 @@ class World:
         else:
             self.graphs = glob.glob(f"graph_topologies/training_{self.num_agents}/*")
         self.tested_agent = 0
+
+
+        self.available_topics = [0, 1, 2, 3]
+        self.current_topic = None
+
         self.reset()
 
     # return all agents controllable by external policies
@@ -260,30 +271,45 @@ class World:
             agent.state.relays_for = np.zeros(self.num_agents)
 
     def update_agent_state(self, agent):
-        # If it has received from a relay node or is message origin
-        # and has not already transmitted the message
+        """
+        If the agent decided to transmit (`agent.action == 1`):
+         - Increase the agent's counters
+         - Mark neighbors as having received this message
+         - Transfer the carried topic to neighbors
+        """
         if agent.action:
             agent.state.transmitted_to += agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
             agent.messages_transmitted += 1
             agent.actions_history[agent.steps_taken - 1] = agent.action
             neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
+
+
             for index in neighbour_indices:
                 self.agents[index].state.received_from[agent.id] += 1
+                # If neighbor is not carrying a topic, assign it
+                if self.agents[index].state.carried_topic==-1:
+                    self.agents[index].state.carried_topic = agent.state.carried_topic
 
     def update_agent_features(self, agent):
-        # Update graph
         self.graph.nodes[agent.id]['features_critic'] = [
             sum(agent.one_hop_neighbours_ids),
             agent.messages_transmitted,
-            agent.steps_taken
+            agent.steps_taken,
+            # 5) Add topic info if relevant for your critic
+            agent.topic_of_interest,
+            agent.state.carried_topic
         ]
 
         self.graph.nodes[agent.id]['features_actor'] = [
             sum(agent.one_hop_neighbours_ids),
             agent.messages_transmitted,
-            agent.action if agent.action is not None else 0
+            agent.action if agent.action is not None else 0,
+            # 5) Add topic info if relevant for your actor
+            agent.topic_of_interest,
+            agent.state.carried_topic
         ]
+
 
     def update_local_graph(self, agent):
         local_graph = nx.ego_graph(
@@ -323,7 +349,6 @@ class World:
         # Get current node positions
         pos = nx.get_node_attributes(self.graph, "pos")
 
-        # Given the step size, compute the x and y movement for each agent
         offset_x, offset_y = self.compute_random_movement(step)
 
         # Update positions of the agents
@@ -350,8 +375,6 @@ class World:
         # One hop neighbors information is stored into the nodes of the graph
         self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
         self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
-
-        # One hop neigh field is updated here
         agent.one_hop_neighbours_ids = one_hop_neighbours_ids
 
     def update_two_hop_neighbors(self, agent):
@@ -368,7 +391,6 @@ class World:
         # Agent can't be two hop neighbor of himself
         agent.two_hop_neighbours_ids[agent.id] = 0
 
-    # Method that calculate random movement for the agents if the graph is dynamic
     def compute_random_movement(self, step):
         ox = [step * self.movement_np_random.uniform(-1, 1) for _ in range(self.num_agents)]
         oy = [step * self.movement_np_random.uniform(-1, 1) for _ in range(self.num_agents)]
@@ -393,9 +415,13 @@ class World:
         self.agents = [Agent(
             i,
             nx.ego_graph(self.graph, i, undirected=True),
-            is_scripted=self.is_scripted
+            is_scripted=self.is_scripted,
+            topic_of_interest=self.np_random.choice(self.available_topics)
         ) for i in range(self.num_agents)]
 
+        self.current_topic = self.np_random.choice(self.available_topics)
+
+        # Pick random source agent
         random_agent = self.agents[self.tested_agent] if self.is_testing else self.np_random.choice(self.agents)
         self.movement_np_random = self.movement_np_random if self.is_testing else np.random.RandomState(self.np_random.integers(0, 1000))
 
@@ -438,12 +464,10 @@ class World:
 
             self.update_agent_features(agent)
 
-        for agent in self.agents:
-            self.update_local_graph(agent)
-
         random_agent.state.message_origin = 1
         random_agent.action = 1
         random_agent.steps_taken += 1
+        random_agent.state.carried_topic = self.current_topic
 
         self.step()
 

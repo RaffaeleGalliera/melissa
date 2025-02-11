@@ -137,13 +137,47 @@ class GraphEnv(AECEnv):
         self.np_random, seed = seeding.np_random(seed)
 
     def get_info(self, agent: str):
+        current_topic = self.world.current_topic
+
+        interested_agents = [
+            ag for ag in self.world.agents
+            if ag.topic_of_interest == current_topic
+        ]
+        num_interested = len(interested_agents)
+
+        interested_with_message = sum([
+            1 for ag in interested_agents
+            if sum(ag.state.received_from) > 0 or ag.state.message_origin == 1
+        ])
+
+        uninterested_agents = [
+            ag for ag in self.world.agents
+            if ag.topic_of_interest != current_topic
+        ]
+        uninterested_with_message = sum([
+            1 for ag in uninterested_agents
+            if sum(ag.state.received_from) > 0 or ag.state.message_origin == 1
+        ])
+
+        coverage_all = sum([
+            1 for ag in self.world.agents
+            if sum(ag.state.received_from) > 0 or ag.state.message_origin == 1
+        ]) / self.world.num_agents
+
         return {
             "logger_stats": {
                 'total_messages_transmitted': self.world.messages_transmitted,
-                'coverage': sum([1 for agent in self.world.agents if sum(agent.state.received_from) or agent.state.message_origin]) / self.world.num_agents,
-                'messages_sent': sum([agent.messages_transmitted for agent in self.world.agents]),
-                'messages_received': sum([sum(agent.state.received_from) for agent in self.world.agents]),
-                'n_neighbours': sum([sum(agent.one_hop_neighbours_ids) for agent in self.world.agents])
+                'coverage': coverage_all,
+                'messages_sent': sum([ag.messages_transmitted for ag in self.world.agents]),
+                'messages_received': sum([sum(ag.state.received_from) for ag in self.world.agents]),
+                'n_neighbours': sum([sum(ag.one_hop_neighbours_ids) for ag in self.world.agents]),
+                'topic_of_the_message': current_topic,
+                'interested_agents': num_interested,
+                'coverage_interested_fraction': (
+                    interested_with_message / num_interested if num_interested > 0 else 0.0
+                ),
+                'coverage_interested_count': interested_with_message,
+                'uninterested_with_message': uninterested_with_message,
             },
         }
 
@@ -381,23 +415,81 @@ class GraphEnv(AECEnv):
         return reward
 
     def reward(self, agent):
+        """
+            Computes a reward that prioritizes forwarding the message
+            only to agents interested in the topic the agent carries.
+            """
+        carried_topic = agent.state.carried_topic
+
+        # Identify one-hop and two-hop neighbors
         one_hop_neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
         two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
-        assert (set(one_hop_neighbor_indices) <= set(two_hop_neighbor_indices))
 
-        if len(one_hop_neighbor_indices) == 0:
-            return 0 if agent.action else 1
+        # Filter neighbors that are INTERESTED in the agent's carried topic
+        one_hop_interested = [
+            idx for idx in one_hop_neighbor_indices
+            if self.world.agents[idx].topic_of_interest == carried_topic
+        ]
+        two_hop_interested = [
+            idx for idx in two_hop_neighbor_indices
+            if self.world.agents[idx].topic_of_interest == carried_topic
+        ]
 
-        reward = agent.two_hop_cover / len(two_hop_neighbor_indices)
-        if agent.action:
-            penalty_1 = sum([1 for index in one_hop_neighbor_indices if self.world.agents[index].messages_transmitted > 0]) / len(one_hop_neighbor_indices)
-            reward = reward - penalty_1
-        else:
-            uncovered_n_lens = [len(np.where(self.world.agents[index].one_hop_neighbours_ids)[0]) for index in one_hop_neighbor_indices if
-                                sum(self.world.agents[index].state.received_from) == 0
-                                and self.world.agents[index].state.message_origin == 0]
-            penalty_2 = max(uncovered_n_lens)/sum(uncovered_n_lens) if len(uncovered_n_lens) else 0
-            reward = reward - penalty_2
+        # 2) Among the two-hop neighbors that share the topic, how many have received the message?
+        num_covered_interested_2hop = 0
+        for idx in two_hop_interested:
+            # If the neighbor has the message (received_from non-empty) or is an origin
+            if sum(self.world.agents[idx].state.received_from) > 0 or \
+                    self.world.agents[idx].state.message_origin == 1:
+                num_covered_interested_2hop += 1
+
+        # Avoid division by zero if no two-hop neighbors are interested
+        total_interested_2hop = len(two_hop_interested)
+        coverage_ratio = (num_covered_interested_2hop / total_interested_2hop) if total_interested_2hop > 0 else 0.0
+
+        # Start with the coverage ratio as the base reward
+        reward = coverage_ratio
+
+        # 3) Additional penalty or bonus based on agent action
+        if agent.action:  # agent transmits
+            # a) Penalize the fraction of neighbors that *do not* care about the topic but still get it
+            uninterested_neighbors = [
+                idx for idx in one_hop_neighbor_indices
+                if self.world.agents[idx].topic_of_interest != carried_topic
+            ]
+
+            if len(one_hop_neighbor_indices) > 0:
+                penalty_uninterested = len(uninterested_neighbors) / len(one_hop_neighbor_indices)
+            else:
+                penalty_uninterested = 0
+
+            # b) Possibly also penalize if you are sending to neighbors who already *have* the message
+            #    (similar to your original penalty_1)
+            repeated_sends = [
+                idx for idx in one_hop_neighbor_indices
+                if sum(self.world.agents[idx].state.received_from) > 0  # or messages_transmitted > 0
+            ]
+            penalty_already_covered = len(repeated_sends) / len(one_hop_neighbor_indices) if len(
+                one_hop_neighbor_indices) else 0
+
+            # Combine the penalties in a simple additive or weighted manner
+            penalty = penalty_uninterested + penalty_already_covered
+
+            # Subtract penalty from coverage-based reward
+            reward -= penalty
+
+        else:  # agent does NOT transmit
+            # If it has interested neighbors that haven't received the message, penalize
+            uncovered_interested = [
+                idx for idx in one_hop_interested
+                if (sum(self.world.agents[idx].state.received_from) == 0
+                    and self.world.agents[idx].state.message_origin == 0)
+            ]
+            if len(uncovered_interested) > 0:
+                # For instance, a penalty proportional to how big they are or how many are uncovered
+                # We'll do a simple fraction of uncovered among all interested
+                penalty_uncovered = len(uncovered_interested) / len(one_hop_interested)
+                reward -= penalty_uncovered
 
         return reward
 
