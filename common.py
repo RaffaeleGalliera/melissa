@@ -51,7 +51,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mpr-policy", action="store_true", default=False, help="Use MPR policy")
     parser.add_argument("--n-agents", type=int, choices=[20, 50, 100], default=20)
     parser.add_argument("--watch", action="store_true", default=False, help="Watch the pre-trained policy only")
-    parser.add_argument("--dynamic-graph", action="store_true", default=False, help="Enable dynamic graphs")
+    parser.add_argument("--dynamic-graph", action="store_true", default=True, help="Enable dynamic graphs")
     parser.add_argument("--prio-buffer", action="store_true", default=False, help="Use prioritized replay buffer")
     parser.add_argument("--save-buffer-name", type=str, default=None)
     parser.add_argument(
@@ -86,7 +86,6 @@ def get_args() -> argparse.Namespace:
     Parse the known arguments and set the learning algorithm name.
     """
     args = get_parser().parse_known_args()[0]
-    args.learning_algorithm = "hl_dgn"
     return args
 
 
@@ -112,7 +111,8 @@ def get_env(
     is_scripted=False,
     is_testing=False,
     dynamic_graph=False,
-    all_agents_source=False
+    all_agents_source=False,
+    num_test_episodes=None
 ) -> PettingZooEnv:
     """
     Create and wrap the GraphEnv in a PettingZooEnv interface.
@@ -125,6 +125,7 @@ def get_env(
         is_scripted=is_scripted,
         is_testing=is_testing,
         dynamic_graph=dynamic_graph,
-        all_agents_source=all_agents_source
+        all_agents_source=all_agents_source,
+        num_test_episodes=num_test_episodes
     )
     return PettingZooEnv(env)

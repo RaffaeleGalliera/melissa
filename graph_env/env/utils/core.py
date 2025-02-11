@@ -1,5 +1,4 @@
 import copy
-from itertools import cycle
 import glob
 import pickle
 import numpy as np
@@ -8,13 +7,13 @@ import networkx as nx
 from torch_geometric.utils import from_networkx
 from . import constants
 
-
 # OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html
-def mpr_heuristic(one_hop_neighbours_ids,
-                  two_hop_neighbours_ids,
-                  agent_id,
-                  local_view
-                  ):
+def mpr_heuristic(
+        one_hop_neighbours_ids,
+        two_hop_neighbours_ids,
+        agent_id,
+        local_view
+):
     two_hop_neighbours_ids = two_hop_neighbours_ids - one_hop_neighbours_ids
     d_y = dict()
     two_hop_coverage_summary = {index: [] for index, value in
@@ -79,7 +78,6 @@ class State:
         self.relays_for = None
         self.relayed_by = None
         self.message_origin = 0
-        # Used for memory-less MPR heuristic
         self.has_taken_action = 0
         self.carried_topic = None
 
@@ -105,8 +103,7 @@ class Agent:
             one_hop_neighbors_ids=None,
             is_scripted=False,
             topic_of_interest=None
-        ):
-        # state
+    ):
         self.id = agent_id
         self.name = str(agent_id)
         self.state = State() if state is None else state
@@ -142,23 +139,21 @@ class Agent:
         )
 
     def update_local_view(self, local_view):
-        # local_view is updated
         self.local_view = local_view
-        # Convert nx graph into torch tensor and save it in geometric_data param
         self.geometric_data = from_networkx(local_view)
 
     def has_received_from_relayed_node(self):
-        return sum([received and relay for received, relay in
-                    zip(self.state.received_from, self.state.relays_for)])
+        return sum([
+            1 for received, relay in zip(self.state.received_from, self.state.relays_for)
+            if received and relay
+        ])
 
     def update_two_hop_cover_from_one_hopper(self, agents):
         two_hop_neighbor_indices = np.where(self.two_hop_neighbours_ids)[0]
 
         new_two_hop_cover = sum(
-            [1 for index in two_hop_neighbor_indices
-             if sum(list(agents[index].state.received_from))
-             or agents[index].state.message_origin
-             ]
+            1 for idx in two_hop_neighbor_indices
+            if sum(agents[idx].state.received_from) or agents[idx].state.message_origin
         )
 
         self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
@@ -176,9 +171,9 @@ class World:
             is_testing=False,
             random_graph=False,
             dynamic_graph=False,
-            all_agents_source=False
+            all_agents_source=False,
+            num_test_episodes=10
     ):
-        # Includes origin message
         self.selected_graph = None
         self.messages_transmitted = 1
         self.origin_agent = None
@@ -191,112 +186,109 @@ class World:
         self.random_graph = random_graph
         self.dynamic_graph = dynamic_graph
         self.agents = None
-        self.np_random = np_random
+        self.np_random = np_random  # main RNG
         self.is_testing = is_testing
         self.pre_move_graph = None
         self.pre_move_agents = None
         self.movement_np_random = None
         self.movement_np_random_state = None
         self.max_node_degree = constants.MAX_NODE_DEGREE
-        if self.is_testing:
-            if self.max_node_degree:
-                self.graphs = cycle(glob.glob(f"graph_topologies/testing_{self.num_agents}_{self.max_node_degree}max/*"))
-            else:
-                self.graphs = cycle(glob.glob(f"graph_topologies/testing_{self.num_agents}/*"))
-        else:
-            self.graphs = glob.glob(f"graph_topologies/training_{self.num_agents}/*")
-        self.tested_agent = 0
-
 
         self.available_topics = [0, 1, 2, 3]
         self.current_topic = None
 
+        # If testing, gather the list of possible graphs
+        if self.is_testing:
+            if self.max_node_degree:
+                self.test_graphs = sorted(glob.glob(
+                    f"graph_topologies/testing_{self.num_agents}_{self.max_node_degree}max/*"
+                ))
+            else:
+                self.test_graphs = sorted(glob.glob(
+                    f"graph_topologies/testing_{self.num_agents}/*"
+                ))
+        else:
+            # If not testing, gather training graphs as before
+            self.train_graphs = glob.glob(f"graph_topologies/training_{self.num_agents}/*")
+
+        # NEW SOLUTION: number of total test episodes in one test "phase"
+        self.num_test_episodes = num_test_episodes
+
+        # We'll store a list of random seeds for each test episode
+        self.test_seeds_list = []
+        # Our index for the test episodes
+        self.test_episode_index = 0
+
+        # If we are testing, let's create (or re-create) a stable list of random seeds
+        if self.is_testing:
+            # For example, create a list of seeds from the main RNG
+            # so that each test run is reproducible if the main seed is the same
+            self.test_seeds_list = [self.np_random.integers(0, 1e9) for _ in range(num_test_episodes)]
+            # e.g. [527192, 339277, 914293, ... up to num_test_episodes]
+
         self.reset()
 
-    # return all agents controllable by external policies
     @property
     def policy_agents(self):
-        return [agent for agent in self.agents if
-                agent.action_callback is None]
+        return [agent for agent in self.agents if agent.action_callback is None]
 
-    # return all agents controlled by world scripts
     @property
     def scripted_agents(self):
-        return [agent for agent in self.agents if
-                agent.action_callback is not None]
+        return [agent for agent in self.agents if agent.action_callback is not None]
 
     def step(self):
-        # set actions for scripted agents
         for agent in self.scripted_agents:
-            agent.suppl_mpr = agent.action_callback(agent.one_hop_neighbours_ids,
-                                                    agent.two_hop_neighbours_ids,
-                                                    agent.id,
-                                                    agent.local_view)
+            agent.suppl_mpr = agent.action_callback(
+                agent.one_hop_neighbours_ids,
+                agent.two_hop_neighbours_ids,
+                agent.id,
+                agent.local_view
+            )
             relay_indices = np.where(agent.suppl_mpr)[0]
-
-            for index in relay_indices:
-                self.agents[index].state.relays_for[agent.id] = 1
+            for idx in relay_indices:
+                self.agents[idx].state.relays_for[agent.id] = 1
 
         for agent in self.scripted_agents:
             agent.action = 0
-
-            # Check if the agent has taken an action or received a message
             if not agent.state.has_taken_action and (
                     sum(agent.state.received_from) or agent.state.message_origin):
-                # Check the specific conditions to update the action to 1
                 if agent.has_received_from_relayed_node() or agent.state.message_origin:
                     agent.action = 1
                 agent.state.has_taken_action = 1
 
-        # Send message
         for agent in self.agents:
-            logging.debug(f"Agent {agent.name} Action: {agent.action} "
-                          f"with Neigh: {agent.one_hop_neighbours_ids}")
+            logging.debug(f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}")
             self.update_agent_state(agent)
 
-        # Updates nodes positions and edges if the graph is dynamic
         if self.dynamic_graph:
             self.move_graph()
 
-        # Features of agents are updated
         for agent in self.agents:
             self.update_agent_features(agent)
 
-        # Local graph of every agent is updated
         for agent in self.agents:
             self.update_local_graph(agent)
 
-        # Reset MPR Policies
         for agent in self.scripted_agents:
             agent.state.relays_for = np.zeros(self.num_agents)
 
     def update_agent_state(self, agent):
-        """
-        If the agent decided to transmit (`agent.action == 1`):
-         - Increase the agent's counters
-         - Mark neighbors as having received this message
-         - Transfer the carried topic to neighbors
-        """
         if agent.action:
             agent.state.transmitted_to += agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
             agent.messages_transmitted += 1
             agent.actions_history[agent.steps_taken - 1] = agent.action
-            neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
 
-
-            for index in neighbour_indices:
-                self.agents[index].state.received_from[agent.id] += 1
-                # If neighbor is not carrying a topic, assign it
-                if self.agents[index].state.carried_topic==-1:
-                    self.agents[index].state.carried_topic = agent.state.carried_topic
+            neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
+            for idx in neighbor_indices:
+                self.agents[idx].state.received_from[agent.id] += 1
+                self.agents[idx].state.carried_topic = agent.state.carried_topic
 
     def update_agent_features(self, agent):
         self.graph.nodes[agent.id]['features_critic'] = [
             sum(agent.one_hop_neighbours_ids),
             agent.messages_transmitted,
             agent.steps_taken,
-            # 5) Add topic info if relevant for your critic
             agent.topic_of_interest,
             agent.state.carried_topic
         ]
@@ -305,48 +297,31 @@ class World:
             sum(agent.one_hop_neighbours_ids),
             agent.messages_transmitted,
             agent.action if agent.action is not None else 0,
-            # 5) Add topic info if relevant for your actor
             agent.topic_of_interest,
             agent.state.carried_topic
         ]
 
-
     def update_local_graph(self, agent):
-        local_graph = nx.ego_graph(
-            self.graph,
-            agent.id,
-            undirected=True
-        )
-
+        local_graph = nx.ego_graph(self.graph, agent.id, undirected=True)
         edges = list(local_graph.edges())
-
-        # Remove edges that do not include the agent
         for edge in edges:
             if agent.id not in edge:
                 local_graph.remove_edge(*edge)
 
-        agent.update_local_view(
-            local_view=local_graph
-        )
-
+        agent.update_local_view(local_graph)
         agent.update_two_hop_cover_from_one_hopper(self.agents)
 
     def move_graph(self):
-        # Graph and agent state is saved for visualization
         self.pre_move_graph = self.graph.copy()
         self.pre_move_agents = copy.deepcopy(self.agents)
-
-        # Move nodes and compute new edges
         self.update_position(step=constants.NODES_MOVEMENT_STEP)
 
-        # Update agent embedded data after the graph movement
         for agent in self.agents:
             self.update_one_hop_neighbors(agent)
         for agent in self.agents:
             self.update_two_hop_neighbors(agent)
 
     def update_position(self, step):
-        # Get current node positions
         pos = nx.get_node_attributes(self.graph, "pos")
 
         offset_x, offset_y = self.compute_random_movement(step)
@@ -358,84 +333,96 @@ class World:
             self.agents[i].pos[0] += offset_x[i]
             self.agents[i].pos[1] += offset_y[i]
 
-        # Given the new positions, calculate the edges and update the graph
         new_edges = nx.geometric_edges(self.graph, radius=constants.RADIUS_OF_INFLUENCE)
         old_edges = list(self.graph.edges())
         self.graph.remove_edges_from(old_edges)
         self.graph.add_edges_from(new_edges)
-
-    def update_one_hop_neighbors(self, agent):
-        # Initialize one hop neighbors to zeros
-        one_hop_neighbours_ids = np.zeros(self.num_agents)
-
-        # Compute the neighbors one hop and save the information in an array
-        for agent_index in self.graph.neighbors(agent.id):
-            one_hop_neighbours_ids[agent_index] = 1
-
-        # One hop neighbors information is stored into the nodes of the graph
-        self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
-        self.graph.nodes[agent.id]['one_hop_list'] = [x for x in self.graph.neighbors(agent.id)]
-        agent.one_hop_neighbours_ids = one_hop_neighbours_ids
-
-    def update_two_hop_neighbors(self, agent):
-        # One hop neighbors are two hop neighbors as well
-        agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids
-
-        # Calculate two hop neighbors
-        for agent_index in self.graph.neighbors(agent.id):
-            agent.two_hop_neighbours_ids = np.logical_or(
-                self.graph.nodes[agent_index]['one_hop'].astype(int),
-                agent.two_hop_neighbours_ids.astype(int)
-            ).astype(int)
-
-        # Agent can't be two hop neighbor of himself
-        agent.two_hop_neighbours_ids[agent.id] = 0
 
     def compute_random_movement(self, step):
         ox = [step * self.movement_np_random.uniform(-1, 1) for _ in range(self.num_agents)]
         oy = [step * self.movement_np_random.uniform(-1, 1) for _ in range(self.num_agents)]
         return ox, oy
 
+    def update_one_hop_neighbors(self, agent):
+        one_hop_neighbours_ids = np.zeros(self.num_agents)
+        for agent_index in self.graph.neighbors(agent.id):
+            one_hop_neighbours_ids[agent_index] = 1
+        self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
+        self.graph.nodes[agent.id]['one_hop_list'] = list(self.graph.neighbors(agent.id))
+        agent.one_hop_neighbours_ids = one_hop_neighbours_ids
+
+    def update_two_hop_neighbors(self, agent):
+        agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids.copy()
+        for agent_index in self.graph.neighbors(agent.id):
+            agent.two_hop_neighbours_ids = np.logical_or(
+                self.graph.nodes[agent_index]['one_hop'].astype(int),
+                agent.two_hop_neighbours_ids.astype(int)
+            ).astype(int)
+        agent.two_hop_neighbours_ids[agent.id] = 0
+
     def reset(self):
-        if self.random_graph:
-            self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
-        elif not self.is_graph_fixed:
-            if self.is_testing:
-                if self.tested_agent == 0:
-                    self.selected_graph = next(self.graphs)
-                    self.movement_np_random = np.random.RandomState(self.np_random.integers(0, 1000))
-                    self.movement_np_random_state = self.movement_np_random.get_state()
-                else:
-                    self.movement_np_random.set_state(self.movement_np_random_state)
-            else:
-                self.selected_graph = self.np_random.choice(self.graphs, replace=True)
+        """
+        reset() is called each time you want a new test or train episode.
+        In testing mode, we pick from test_seeds_list in order
+        to get reproducible "random" scenarios.
+        """
+        if self.is_testing:
+            if len(self.test_seeds_list) == 0:
+                raise ValueError("No test seeds have been generated!")
 
-            self.graph = load_graph(self.selected_graph)
+            current_seed = self.test_seeds_list[self.test_episode_index]
+            self.test_episode_index = (self.test_episode_index + 1) % self.num_test_episodes
+            test_rng = np.random.RandomState(current_seed)
 
-        self.agents = [Agent(
-            i,
-            nx.ego_graph(self.graph, i, undirected=True),
-            is_scripted=self.is_scripted,
-            topic_of_interest=self.np_random.choice(self.available_topics)
-        ) for i in range(self.num_agents)]
+            if len(self.test_graphs) == 0:
+                raise ValueError("No test graphs found!")
+            selected_graph_path = test_rng.choice(self.test_graphs)
+            self.selected_graph = load_graph(selected_graph_path)
+            self.graph = self.selected_graph
 
-        self.current_topic = self.np_random.choice(self.available_topics)
+            movement_seed = test_rng.randint(0, 1e9)
+            self.movement_np_random = np.random.RandomState(movement_seed)
 
-        # Pick random source agent
-        random_agent = self.agents[self.tested_agent] if self.is_testing else self.np_random.choice(self.agents)
-        self.movement_np_random = self.movement_np_random if self.is_testing else np.random.RandomState(self.np_random.integers(0, 1000))
+            self.current_topic = test_rng.choice(self.available_topics)
 
-        # Includes origin message
+            chosen_source_id = test_rng.randint(0, self.num_agents)
+
+        else:
+            # Training scenario (not testing)
+            if self.random_graph:
+                # Create a new random geometric graph
+                self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
+            elif not self.is_graph_fixed:
+                # pick from training graphs randomly
+                self.selected_graph = self.np_random.choice(self.train_graphs, replace=True)
+                self.graph = load_graph(self.selected_graph)
+            # pick a random movement seed
+            movement_seed = self.np_random.integers(0, 1e9)
+            self.movement_np_random = np.random.RandomState(movement_seed)
+            # random topic
+            self.current_topic = self.np_random.choice(self.available_topics)
+            # random source agent
+            chosen_source_id = self.np_random.integers(0, self.num_agents)
+
+        # Reinit environment state
+        self.agents = []
         self.messages_transmitted = 0
-        self.origin_agent = random_agent.id
+        self.origin_agent = chosen_source_id
 
-        if not self.is_graph_fixed and self.is_testing:
-            if self.all_agents_source:
-                self.tested_agent += 1
-                if self.tested_agent == self.num_agents:
-                    self.tested_agent = 0
+        for i in range(self.num_agents):
+            agent_lv = nx.ego_graph(self.graph, i, undirected=True)
+            if self.is_testing:
+                agent_interest = test_rng.choice(self.available_topics)
             else:
-                self.tested_agent = 0
+                agent_interest = self.np_random.choice(self.available_topics)
+
+            new_agent = Agent(
+                i,
+                agent_lv,
+                is_scripted=self.is_scripted,
+                topic_of_interest=agent_interest
+            )
+            self.agents.append(new_agent)
 
         for agent in self.agents:
             agent.state.reset(self.num_agents)
@@ -447,28 +434,24 @@ class World:
         actions_dim = np.ones(2)
         for agent in self.agents:
             agent.reset(
-                local_view=nx.ego_graph(
-                    self.graph,
-                    agent.id,
-                    undirected=True
-                ),
+                local_view=nx.ego_graph(self.graph, agent.id, undirected=True),
                 pos=self.graph.nodes[agent.id]['pos'],
                 one_hop_neighbours_ids=agent.one_hop_neighbours_ids
             )
-
             self.update_two_hop_neighbors(agent)
-
             agent.allowed_actions = [True] * int(np.sum(actions_dim))
             agent.steps_taken = 0
             agent.truncated = False
-
             self.update_agent_features(agent)
 
-        random_agent.state.message_origin = 1
-        random_agent.action = 1
-        random_agent.steps_taken += 1
-        random_agent.state.carried_topic = self.current_topic
+        # Mark the source agent
+        origin_agent_obj = self.agents[self.origin_agent]
+        origin_agent_obj.state.message_origin = 1
+        origin_agent_obj.action = 1
+        origin_agent_obj.steps_taken = 1
+        origin_agent_obj.state.carried_topic = self.current_topic
 
+        # Let them transmit immediately
         self.step()
 
 
@@ -479,16 +462,12 @@ def create_connected_graph(n, radius):
             break
         else:
             logging.debug("Generated graph not connected, retry")
-
     return graph
-
 
 def load_graph(path="testing_graph.gpickle"):
-    with open(path, "rb") as input_file:
-        graph = pickle.load(input_file)
-    return graph
-
+    with open(path, "rb") as f:
+        return pickle.load(f)
 
 def save_graph(graph, path="testing_graph.gpickle"):
-    with open(path, "wb") as output_file:
-        pickle.dump(graph, output_file)
+    with open(path, "wb") as f:
+        pickle.dump(graph, f)

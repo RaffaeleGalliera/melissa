@@ -39,7 +39,8 @@ class GraphEnv(AECEnv):
             is_testing=False,
             random_graph=False,
             dynamic_graph=False,
-            all_agents_source=False
+            all_agents_source=False,
+            num_test_episodes=None
     ):
         super().__init__()
         self.seed()
@@ -51,15 +52,18 @@ class GraphEnv(AECEnv):
         self.radius = radius
         self.is_new_round = None
 
-        self.world = World(graph=graph,
-                           number_of_agents=self.number_of_agents,
-                           radius=radius,
-                           np_random=self.np_random,
-                           is_scripted=is_scripted,
-                           is_testing=is_testing,
-                           random_graph=random_graph,
-                           dynamic_graph=dynamic_graph,
-                           all_agents_source=all_agents_source)
+        self.world = World(
+            graph=graph,
+            number_of_agents=self.number_of_agents,
+            radius=radius,
+            np_random=self.np_random,
+            is_scripted=is_scripted,
+            is_testing=is_testing,
+            random_graph=random_graph,
+            dynamic_graph=dynamic_graph,
+            all_agents_source=all_agents_source,
+            num_test_episodes=num_test_episodes
+        )
 
         # Needs to be a string for assertions check in tianshou
         self.agents = [agent.name for agent in self.world.agents]

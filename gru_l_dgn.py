@@ -97,7 +97,8 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
             is_testing=True,
             dynamic_graph=args.dynamic_graph,
             render_mode="human",
-            all_agents_source=True
+            all_agents_source=True,
+            num_test_episodes=args.test_num
         )
     ])
 
@@ -148,7 +149,8 @@ def train_agent(
         lambda: get_env(
             number_of_agents=args.n_agents,
             dynamic_graph=args.dynamic_graph,
-            is_testing=True
+            is_testing=True,
+            num_test_episodes=args.test_num
         )
     ])
 
@@ -203,7 +205,7 @@ def train_agent(
     Path(weights_path).mkdir(parents=True, exist_ok=True)
 
     if not args.optimize:
-        logger = WandbLogger(project="dancing_bees", name=args.model_name)
+        logger = WandbLogger(project="group_interest_dissemination", name=args.model_name)
         writer = SummaryWriter(log_path)
         writer.add_text("args", str(args))
         if logger is not None:
