@@ -7,6 +7,7 @@ import networkx as nx
 from torch_geometric.utils import from_networkx
 from . import constants
 
+
 # OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html
 def mpr_heuristic(
         one_hop_neighbours_ids,
@@ -24,7 +25,7 @@ def mpr_heuristic(
 
     for neighbor in local_view.neighbors(agent_id):
         clean_neighbor_neighbors = local_view.nodes[neighbor]['one_hop'].copy()
-        # Exclude from the list the 2hop neighbours already reachable by self
+        # Exclude from the list the 2-hop neighbours already reachable by self
         clean_neighbor_neighbors[agent_id] = 0
         for index in np.where(one_hop_neighbours_ids)[0]:
             clean_neighbor_neighbors[index] = 0
@@ -36,8 +37,7 @@ def mpr_heuristic(
         d_y[int(local_view.nodes[neighbor]['label'])] = sum(
             clean_neighbor_neighbors)
 
-    # Add to covered if the cleaned 2hop neighbors are the only ones providing
-    # that link so far
+    # Add to covered if that neighbor is the unique provider
     for key, candidates in two_hop_coverage_summary.items():
         if len(candidates) == 1:
             mpr[candidates[0]] = 1
@@ -128,6 +128,10 @@ class Agent:
         self.topic_of_interest = topic_of_interest
 
     def reset(self, local_view, pos, one_hop_neighbours_ids):
+        """
+        Re-initialize the Agent with its existing 'state' object so that 'received_from'
+        and other arrays remain the same instance (or re-create them).
+        """
         self.__init__(
             agent_id=self.id,
             local_view=local_view,
@@ -149,13 +153,12 @@ class Agent:
         ])
 
     def update_two_hop_cover_from_one_hopper(self, agents):
+        """Calculate how many two-hop neighbors have the message."""
         two_hop_neighbor_indices = np.where(self.two_hop_neighbours_ids)[0]
-
         new_two_hop_cover = sum(
             1 for idx in two_hop_neighbor_indices
             if sum(agents[idx].state.received_from) or agents[idx].state.message_origin
         )
-
         self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
         self.two_hop_cover = new_two_hop_cover
 
@@ -172,6 +175,7 @@ class World:
             random_graph=False,
             dynamic_graph=False,
             all_agents_source=False,
+            # Optional: number of test episodes we plan to run in a testing phase
             num_test_episodes=10
     ):
         self.selected_graph = None
@@ -181,12 +185,13 @@ class World:
         self.radius = radius
         self.graph = graph
         self.all_agents_source = all_agents_source
-        self.is_graph_fixed = True if graph else False
+        self.is_graph_fixed = (graph is not None)
         self.is_scripted = is_scripted
         self.random_graph = random_graph
         self.dynamic_graph = dynamic_graph
         self.agents = None
-        self.np_random = np_random  # main RNG
+        # The main RNG
+        self.np_random = np_random
         self.is_testing = is_testing
         self.pre_move_graph = None
         self.pre_move_agents = None
@@ -194,10 +199,11 @@ class World:
         self.movement_np_random_state = None
         self.max_node_degree = constants.MAX_NODE_DEGREE
 
+        # Possible topics in the environment
         self.available_topics = [0, 1, 2, 3]
         self.current_topic = None
 
-        # If testing, gather the list of possible graphs
+        # Gathers graphs
         if self.is_testing:
             if self.max_node_degree:
                 self.test_graphs = sorted(glob.glob(
@@ -208,24 +214,21 @@ class World:
                     f"graph_topologies/testing_{self.num_agents}/*"
                 ))
         else:
-            # If not testing, gather training graphs as before
             self.train_graphs = glob.glob(f"graph_topologies/training_{self.num_agents}/*")
 
-        # NEW SOLUTION: number of total test episodes in one test "phase"
+        # We store a sequence of test seeds for reproducibility
         self.num_test_episodes = num_test_episodes
-
-        # We'll store a list of random seeds for each test episode
         self.test_seeds_list = []
-        # Our index for the test episodes
         self.test_episode_index = 0
 
-        # If we are testing, let's create (or re-create) a stable list of random seeds
         if self.is_testing:
-            # For example, create a list of seeds from the main RNG
-            # so that each test run is reproducible if the main seed is the same
-            self.test_seeds_list = [self.np_random.integers(0, 1e9) for _ in range(num_test_episodes)]
-            # e.g. [527192, 339277, 914293, ... up to num_test_episodes]
+            # Generate a list of per-episode seeds from the main environment RNG
+            testing_generator = np.random.RandomState(17)
+            self.test_seeds_list = [
+                testing_generator.randint(0, 1e9) for _ in range(num_test_episodes)
+            ]
 
+        # Do the initial reset
         self.reset()
 
     @property
@@ -237,6 +240,7 @@ class World:
         return [agent for agent in self.agents if agent.action_callback is not None]
 
     def step(self):
+        # Scripted agents choose their actions
         for agent in self.scripted_agents:
             agent.suppl_mpr = agent.action_callback(
                 agent.one_hop_neighbours_ids,
@@ -248,6 +252,7 @@ class World:
             for idx in relay_indices:
                 self.agents[idx].state.relays_for[agent.id] = 1
 
+        # Convert MPR-based decisions into actual actions
         for agent in self.scripted_agents:
             agent.action = 0
             if not agent.state.has_taken_action and (
@@ -256,16 +261,19 @@ class World:
                     agent.action = 1
                 agent.state.has_taken_action = 1
 
+        # Update states based on actions
         for agent in self.agents:
-            logging.debug(f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}")
+            logging.debug(
+                f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}")
             self.update_agent_state(agent)
 
+        # Move graph if dynamic
         if self.dynamic_graph:
             self.move_graph()
 
+        # Update features, local graphs
         for agent in self.agents:
             self.update_agent_features(agent)
-
         for agent in self.agents:
             self.update_local_graph(agent)
 
@@ -304,12 +312,14 @@ class World:
     def update_local_graph(self, agent):
         local_graph = nx.ego_graph(self.graph, agent.id, undirected=True)
         edges = list(local_graph.edges())
+        # Keep only edges that include the agent
         for edge in edges:
             if agent.id not in edge:
                 local_graph.remove_edge(*edge)
 
         agent.update_local_view(local_graph)
         agent.update_two_hop_cover_from_one_hopper(self.agents)
+
 
     def move_graph(self):
         self.pre_move_graph = self.graph.copy()
@@ -323,12 +333,10 @@ class World:
 
     def update_position(self, step):
         pos = nx.get_node_attributes(self.graph, "pos")
-
         offset_x, offset_y = self.compute_random_movement(step)
-
-        # Update positions of the agents
         pos = {k: [v[0] + offset_x[k], v[1] + offset_y[k]] for k, v in pos.items()}
         nx.set_node_attributes(self.graph, pos, "pos")
+
         for i in range(self.num_agents):
             self.agents[i].pos[0] += offset_x[i]
             self.agents[i].pos[1] += offset_y[i]
@@ -362,63 +370,62 @@ class World:
 
     def reset(self):
         """
-        reset() is called each time you want a new test or train episode.
-        In testing mode, we pick from test_seeds_list in order
-        to get reproducible "random" scenarios.
+        If in testing mode, we pick from `test_seeds_list` in a strict order.
+        If in training mode, we use `self.np_random` to pick a new seed each time.
         """
         if self.is_testing:
-            if len(self.test_seeds_list) == 0:
-                raise ValueError("No test seeds have been generated!")
-
-            current_seed = self.test_seeds_list[self.test_episode_index]
+            if not self.test_seeds_list:
+                raise ValueError("No test seeds have been generated! Check num_test_episodes.")
+            # Current seed from the pre-generated list
+            episode_seed = self.test_seeds_list[self.test_episode_index]
             self.test_episode_index = (self.test_episode_index + 1) % self.num_test_episodes
-            test_rng = np.random.RandomState(current_seed)
+            # A local RNG for this episode
+            ep_rng = np.random.RandomState(episode_seed)
 
-            if len(self.test_graphs) == 0:
+            if not self.test_graphs:
                 raise ValueError("No test graphs found!")
-            selected_graph_path = test_rng.choice(self.test_graphs)
+            selected_graph_path = ep_rng.choice(self.test_graphs)
             self.selected_graph = load_graph(selected_graph_path)
             self.graph = self.selected_graph
 
-            movement_seed = test_rng.randint(0, 1e9)
+            movement_seed = ep_rng.randint(0, 1e9)
             self.movement_np_random = np.random.RandomState(movement_seed)
 
-            self.current_topic = test_rng.choice(self.available_topics)
-
-            chosen_source_id = test_rng.randint(0, self.num_agents)
+            self.current_topic = ep_rng.choice(self.available_topics)
+            chosen_source_id = ep_rng.randint(0, self.num_agents)
 
         else:
-            # Training scenario (not testing)
+            episode_seed = self.np_random.integers(0, 1e9)
+            ep_rng = np.random.RandomState(episode_seed)
+
             if self.random_graph:
-                # Create a new random geometric graph
                 self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
             elif not self.is_graph_fixed:
-                # pick from training graphs randomly
                 self.selected_graph = self.np_random.choice(self.train_graphs, replace=True)
                 self.graph = load_graph(self.selected_graph)
-            # pick a random movement seed
-            movement_seed = self.np_random.integers(0, 1e9)
-            self.movement_np_random = np.random.RandomState(movement_seed)
-            # random topic
-            self.current_topic = self.np_random.choice(self.available_topics)
-            # random source agent
-            chosen_source_id = self.np_random.integers(0, self.num_agents)
 
-        # Reinit environment state
+            # Movement random
+            movement_seed = ep_rng.randint(0, 1e9)
+            self.movement_np_random = np.random.RandomState(movement_seed)
+
+            # Topic
+            self.current_topic = ep_rng.choice(self.available_topics)
+            # Source agent
+            chosen_source_id = ep_rng.randint(0, self.num_agents)
+
+        # ------------------------------------------------------------------
+        # Now we create agents, reset states, etc.
+        # ------------------------------------------------------------------
         self.agents = []
         self.messages_transmitted = 0
         self.origin_agent = chosen_source_id
 
         for i in range(self.num_agents):
-            agent_lv = nx.ego_graph(self.graph, i, undirected=True)
-            if self.is_testing:
-                agent_interest = test_rng.choice(self.available_topics)
-            else:
-                agent_interest = self.np_random.choice(self.available_topics)
-
+            lv = nx.ego_graph(self.graph, i, undirected=True)
+            agent_interest = ep_rng.choice(self.available_topics)
             new_agent = Agent(
                 i,
-                agent_lv,
+                lv,
                 is_scripted=self.is_scripted,
                 topic_of_interest=agent_interest
             )
@@ -431,6 +438,7 @@ class World:
             self.graph.nodes[agent.id]['features_critic'] = np.zeros((7,))
             self.graph.nodes[agent.id]['label'] = agent.id
 
+        # E.g. if you have a discrete action space with dimension 2
         actions_dim = np.ones(2)
         for agent in self.agents:
             agent.reset(
@@ -445,11 +453,11 @@ class World:
             self.update_agent_features(agent)
 
         # Mark the source agent
-        origin_agent_obj = self.agents[self.origin_agent]
-        origin_agent_obj.state.message_origin = 1
-        origin_agent_obj.action = 1
-        origin_agent_obj.steps_taken = 1
-        origin_agent_obj.state.carried_topic = self.current_topic
+        source_agent = self.agents[self.origin_agent]
+        source_agent.state.message_origin = 1
+        source_agent.action = 1
+        source_agent.steps_taken = 1
+        source_agent.state.carried_topic = self.current_topic
 
         # Let them transmit immediately
         self.step()
