@@ -16,7 +16,6 @@ from .utils.selector import CustomSelector
 from torch_geometric.utils import from_networkx
 
 import matplotlib.pyplot as plt
-import math
 
 
 class GraphEnv(AECEnv):
@@ -65,7 +64,6 @@ class GraphEnv(AECEnv):
             num_test_episodes=num_test_episodes
         )
 
-        # Needs to be a string for assertions check in tianshou
         self.agents = [agent.name for agent in self.world.agents]
         self.possible_agents = self.agents[:]
         self.agent_name_mapping = dict(
@@ -73,7 +71,7 @@ class GraphEnv(AECEnv):
         )
         self._agent_selector = CustomSelector(self.agents)
 
-        # set spaces
+        # set observation/action spaces
         self.action_spaces = dict()
         self.observation_spaces = dict()
         state_dim = 0
@@ -86,10 +84,12 @@ class GraphEnv(AECEnv):
                     shape=(obs_dim,),
                     dtype=np.float32,
                 ),
-                'action_mask': gymnasium.spaces.Box(low=0,
-                                                    high=1,
-                                                    shape=(2,),
-                                                    dtype=np.int8),
+                'action_mask': gymnasium.spaces.Box(
+                    low=0,
+                    high=1,
+                    shape=(2,),
+                    dtype=np.int8,
+                ),
             })
             state_dim += obs_dim
             self.action_spaces[agent.name] = gymnasium.spaces.Discrete(2)
@@ -104,6 +104,7 @@ class GraphEnv(AECEnv):
         self.max_cycles = max_cycles
         self.num_moves = 0
         self.current_actions = [None] * self.number_of_agents
+        self.episode_rewards_sum = 0.0
 
         self.reset()
 
@@ -182,6 +183,7 @@ class GraphEnv(AECEnv):
                 ),
                 'coverage_interested_count': interested_with_message,
                 'uninterested_with_message': uninterested_with_message,
+                'episode_rewards_sum': self.episode_rewards_sum
             },
         }
 
@@ -194,8 +196,6 @@ class GraphEnv(AECEnv):
             self.is_new_round = False
             self.infos[agent]["explicit_reset"] = True
 
-
-        # Todo: Need to fix resetting of the environment doesn't issue environment_step
         if self.is_new_round:
             self.infos[agent]['environment_step'] = True
             self.is_new_round = False
@@ -211,45 +211,39 @@ class GraphEnv(AECEnv):
             )
             for agent in self.possible_agents
         )
-
         return np.concatenate(states, axis=None)
 
     def observation(self, agent):
         agent_observation = agent.geometric_data
         one_hop_neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
-        active_one_hop = [neighbor for neighbor in one_hop_neighbor_indices if not self.world.agents[neighbor].truncated and str(neighbor) in self.agents]
+        active_one_hop = [
+            neighbor
+            for neighbor in one_hop_neighbor_indices
+            if not self.world.agents[neighbor].truncated and str(neighbor) in self.agents
+        ]
 
-        # Every entry needs to be wrapped in a Batch object, otherwise
-        # we will have shape errors in the data replay buffer
         edge_index = np.asarray(agent_observation.edge_index, dtype=np.int32)
         features = np.asarray(agent_observation.features_actor, dtype=np.float32)
 
-        # Store Network for Total/Neighbourhood-wise VDN
-        # network = networkx.ego_graph(self.world.graph, agent.id, undirected=True, radius=2)
         network = from_networkx(self.world.graph)
         network_edge_index = np.asarray(network.edge_index, np.int32)
         network_features = np.asarray(network.features_actor, dtype=np.float32)
-
         labels = np.asarray(network.label, dtype=object)
-        data = Batch.stack([Batch(observation=edge_index),
-                            Batch(observation=labels),
-                            Batch(observation=features),
-                            Batch(observation=np.where(labels == agent.id)),
-                            Batch(observation=network_edge_index),
-                            Batch(observation=network_features),
-                            Batch(observation=active_one_hop)])
 
-        agent.allowed_actions[1] = True if (sum(agent.state.received_from) or agent.state.message_origin) and not sum(
-            agent.state.transmitted_to) else False
-        # Message origin is handled before the first step, hence
-        # there is no need to prohibit non transmission
-        agent.allowed_actions[0] = False if sum([1 for index in one_hop_neighbor_indices if sum(
-            self.world.agents[index].one_hop_neighbours_ids) == 1]) and not sum(agent.state.transmitted_to) else True
+        data = Batch.stack([
+            Batch(observation=edge_index),
+            Batch(observation=labels),
+            Batch(observation=features),
+            Batch(observation=np.where(labels == agent.id)),
+            Batch(observation=network_edge_index),
+            Batch(observation=network_features),
+            Batch(observation=active_one_hop)
+        ])
 
         return data
 
     def reset(self, seed=None, return_info=False, options=None):
-        # TODO check that workers seed is set from train_nvdn.py
+        # Optionally reseed environment if user passes a new seed
         if seed is not None:
             self.seed(seed=seed)
         self.world.np_random = self.np_random
@@ -264,9 +258,13 @@ class GraphEnv(AECEnv):
         self.num_moves = 0
 
         self.world.reset()
-        self.agents = [agent.name for agent in self.world.agents
-                       if (sum(agent.state.received_from) and
-                           not agent.state.message_origin)]
+
+        self.episode_rewards_sum = 0.0
+
+        self.agents = [
+            agent.name for agent in self.world.agents
+            if (sum(agent.state.received_from) and not agent.state.message_origin)
+        ]
         self._agent_selector.enable(self.agents)
 
         self.agent_selection = self._agent_selector.next()
@@ -274,16 +272,16 @@ class GraphEnv(AECEnv):
 
     def _was_dead_step(self, action: ActionType) -> None:
         """
-        Same default was_dead_step method used by PettingZoo, but avoids to clear rewards for all agents at the end.
+        Same default was_dead_step method used by PettingZoo, but avoids clearing
+        rewards for all agents at the end.
         """
         if action is not None:
             raise ValueError("when an agent is dead, the only valid action is None")
 
-        # removes dead agent
         agent = self.agent_selection
         assert (
             self.terminations[agent] or self.truncations[agent]
-        ), "an agent that was not dead as attempted to be removed"
+        ), "an agent that was not dead attempted to be removed"
         del self.terminations[agent]
         del self.truncations[agent]
         del self.rewards[agent]
@@ -291,7 +289,6 @@ class GraphEnv(AECEnv):
         del self.infos[agent]
         self.agents.remove(agent)
 
-        # finds next dead agent or loads next live agent (Stored in _skip_agent_selection)
         _deads_order = [
             agent
             for agent in self.agents
@@ -303,32 +300,28 @@ class GraphEnv(AECEnv):
             self.agent_selection = _deads_order[0]
         else:
             if getattr(self, "_skip_agent_selection", None) is not None:
-                assert self._skip_agent_selection is not None
                 self.agent_selection = self._skip_agent_selection
             self._skip_agent_selection = None
 
-    # Tianshou PettingZoo Wrapper returns the reward of every agent altogether (not using CumulativeReward)
     def step(self, action):
         if (
-                self.terminations[self.agent_selection]
-                or self.truncations[self.agent_selection]
+            self.terminations[self.agent_selection]
+            or self.truncations[self.agent_selection]
         ):
             self._agent_selector.disable(self.agent_selection)
             self._was_dead_step(None)
             return
-        current_agent = self.agent_selection
 
-        # current_idx is the agent's index
+        current_agent = self.agent_selection
         current_idx = self.agent_name_mapping[self.agent_selection]
         self.current_actions[current_idx] = action
         agent_tmp = self.world.agents[int(current_agent)]
         agent_tmp.steps_taken += 1
 
-        # the agent which stepped last had its _cumulative_rewards accounted
-        # for (because it was returned by last()), so the _cumulative_rewards
-        # for this agent should start again at 0
         self._cumulative_rewards[current_agent] = 0
         self.agent_selection = self._agent_selector.next()
+
+        # If we've got an action from every agent in the round:
         if not self.agent_selection:
             self._accumulate_rewards()
             self._clear_rewards()
@@ -339,20 +332,19 @@ class GraphEnv(AECEnv):
                 agent_obj = self.world.agents[int(agent)]
                 if agent_obj.steps_taken >= 4 and not agent_obj.truncated:
                     agent_obj.truncated = True
-                    # terminations must be shifted somehow due to how
-                    # the collector gathers the next obs
                     self.terminations[agent_obj.name] = True
 
-            self.agents = [agent.name for agent in self.world.agents
-                           if (sum(agent.state.received_from) and
-                               not agent.state.message_origin and
-                               agent.name in self.terminations)]
+            self.agents = [
+                agent.name for agent in self.world.agents
+                if (sum(agent.state.received_from)
+                    and not agent.state.message_origin
+                    and agent.name in self.terminations)
+            ]
             self._agent_selector.enable(self.agents)
             self._agent_selector.start_new_round()
             self.is_new_round = True
             self.agent_selection = self._agent_selector.next()
 
-            # previous_agent = self.agent_selection
             self.current_actions = [None] * self.number_of_agents
 
             n_received = sum(
@@ -364,7 +356,8 @@ class GraphEnv(AECEnv):
                 cds = [agent.id for agent in self.world.agents if agent.messages_transmitted > 0]
                 print(
                     f"Every agent has received the message, terminating in {self.num_moves}, "
-                    f"messages transmitted: {self.world.messages_transmitted}")
+                    f"messages transmitted: {self.world.messages_transmitted}"
+                )
                 print(cds)
             if self.render_mode == 'human':
                 self.render()
@@ -373,20 +366,19 @@ class GraphEnv(AECEnv):
         self._deads_step_first()
 
     def _execute_world_step(self):
+        # Convert each agent's discrete action into scenario action
         for i, agent in enumerate(self.world.agents):
             action = self.current_actions[i]
             scenario_action = [action]
-            self._set_action(scenario_action,
-                             agent,
-                             self.action_spaces[agent.name])
+            self._set_action(scenario_action, agent, self.action_spaces[agent.name])
 
         self.world.step()
 
         global_reward = 0.0
-
         if self.local_ratio is not None:
             global_reward = float(self.global_reward())
 
+        # Compute each agent's reward and accumulate to episode sum
         for agent in [a for a in self.world.agents if a.name in self.agents]:
             agent_reward = float(self.reward(agent))
             if self.local_ratio is not None:
@@ -399,24 +391,15 @@ class GraphEnv(AECEnv):
 
             self.rewards[agent.name] = reward
 
+            self.episode_rewards_sum += reward
+
     def _set_action(self, action, agent, param):
         agent.action = action[0]
         action = action[1:]
         assert len(action) == 0
 
     def global_reward(self):
-        # Negative reward
-        accumulated = 0
-        alpha = 0.001
-        for agent in self.world.agents:
-            if sum(agent.state.received_from) or agent.state.message_origin:
-                accumulated += 1
-        completion = accumulated / len(self.world.agents)
-        logging.debug(f"Agent {agent.name} received : {- 1 + completion}")
-        reward = 1 if completion == 1 else math.log(completion) - math.log(
-            self.world.messages_transmitted)
-        # reward = - ((alpha * self.world.messages_transmitted) / accumulated)
-        return reward
+        pass
 
     def reward(self, agent):
         """
@@ -425,11 +408,9 @@ class GraphEnv(AECEnv):
             """
         carried_topic = agent.state.carried_topic
 
-        # Identify one-hop and two-hop neighbors
         one_hop_neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
         two_hop_neighbor_indices = np.where(agent.two_hop_neighbours_ids)[0]
 
-        # Filter neighbors that are INTERESTED in the agent's carried topic
         one_hop_interested = [
             idx for idx in one_hop_neighbor_indices
             if self.world.agents[idx].topic_of_interest == carried_topic
@@ -439,36 +420,28 @@ class GraphEnv(AECEnv):
             if self.world.agents[idx].topic_of_interest == carried_topic
         ]
 
-        # 2) Among the two-hop neighbors that share the topic, how many have received the message?
         num_covered_interested_2hop = 0
         for idx in two_hop_interested:
-            # If the neighbor has the message (received_from non-empty) or is an origin
             if sum(self.world.agents[idx].state.received_from) > 0 or \
                     self.world.agents[idx].state.message_origin == 1:
                 num_covered_interested_2hop += 1
 
-        # Avoid division by zero if no two-hop neighbors are interested
         total_interested_2hop = len(two_hop_interested)
         coverage_ratio = (num_covered_interested_2hop / total_interested_2hop) if total_interested_2hop > 0 else 0.0
 
         # Start with the coverage ratio as the base reward
         reward = coverage_ratio
 
-        # 3) Additional penalty or bonus based on agent action
         if agent.action:  # agent transmits
-            # a) Penalize the fraction of neighbors that *do not* care about the topic but still get it
             uninterested_neighbors = [
                 idx for idx in one_hop_neighbor_indices
                 if self.world.agents[idx].topic_of_interest != carried_topic
             ]
-
             if len(one_hop_neighbor_indices) > 0:
                 penalty_uninterested = len(uninterested_neighbors) / len(one_hop_neighbor_indices)
             else:
                 penalty_uninterested = 0
 
-            # b) Possibly also penalize if you are sending to neighbors who already *have* the message
-            #    (similar to your original penalty_1)
             repeated_sends = [
                 idx for idx in one_hop_neighbor_indices
                 if sum(self.world.agents[idx].state.received_from) > 0  # or messages_transmitted > 0
@@ -476,7 +449,6 @@ class GraphEnv(AECEnv):
             penalty_already_covered = len(repeated_sends) / len(one_hop_neighbor_indices) if len(
                 one_hop_neighbor_indices) else 0
 
-            # Combine the penalties in a simple additive or weighted manner
             penalty = penalty_uninterested + penalty_already_covered
 
             # Subtract penalty from coverage-based reward
@@ -490,8 +462,6 @@ class GraphEnv(AECEnv):
                     and self.world.agents[idx].state.message_origin == 0)
             ]
             if len(uncovered_interested) > 0:
-                # For instance, a penalty proportional to how big they are or how many are uncovered
-                # We'll do a simple fraction of uncovered among all interested
                 penalty_uncovered = len(uncovered_interested) / len(one_hop_interested)
                 reward -= penalty_uncovered
 
@@ -503,6 +473,7 @@ def draw_graph(graph, agent_list):
     pos = nx.get_node_attributes(graph, "pos")
     color_map = []
     for node in graph:
+        # Color each node depending on message state
         if sum(agent_list[node].state.received_from) and not sum(agent_list[node].state.transmitted_to):
             color_map.append('green')
         elif agent_list[node].state.message_origin:
@@ -523,9 +494,7 @@ def make_env(raw_env):
         env = raw_env(**kwargs)
         env = wrappers.AssertOutOfBoundsWrapper(env)
         env = wrappers.OrderEnforcingWrapper(env)
-        # env = frame_stack_v2(env)
         return env
-
     return env
 
 

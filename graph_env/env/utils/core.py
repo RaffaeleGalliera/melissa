@@ -116,7 +116,6 @@ class Agent:
         self.two_hop_neighbours_ids = None
         self.two_hop_cover = 0
         self.gained_two_hop_cover = 0
-        self.allowed_actions = None
         self.action = None
         self.is_scripted = is_scripted
         self.action_callback = mpr_heuristic if self.is_scripted else None
@@ -438,8 +437,6 @@ class World:
             self.graph.nodes[agent.id]['features_critic'] = np.zeros((7,))
             self.graph.nodes[agent.id]['label'] = agent.id
 
-        # E.g. if you have a discrete action space with dimension 2
-        actions_dim = np.ones(2)
         for agent in self.agents:
             agent.reset(
                 local_view=nx.ego_graph(self.graph, agent.id, undirected=True),
@@ -447,7 +444,6 @@ class World:
                 one_hop_neighbours_ids=agent.one_hop_neighbours_ids
             )
             self.update_two_hop_neighbors(agent)
-            agent.allowed_actions = [True] * int(np.sum(actions_dim))
             agent.steps_taken = 0
             agent.truncated = False
             self.update_agent_features(agent)
