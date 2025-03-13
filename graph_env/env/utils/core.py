@@ -4,7 +4,6 @@ import pickle
 import numpy as np
 import logging
 import networkx as nx
-from torch_geometric.utils import from_networkx
 from . import constants
 
 
@@ -15,11 +14,15 @@ def mpr_heuristic(
         agent_id,
         local_view
 ):
+    """
+    OLSRv1 MPR computation as before.
+    This is invoked for scripted agents in World.step().
+    """
     two_hop_neighbours_ids = two_hop_neighbours_ids - one_hop_neighbours_ids
     d_y = dict()
-    two_hop_coverage_summary = {index: [] for index, value in
-                                enumerate(two_hop_neighbours_ids) if
-                                value == 1}
+    two_hop_coverage_summary = {
+        index: [] for index, value in enumerate(two_hop_neighbours_ids) if value == 1
+    }
     covered = np.zeros(len(one_hop_neighbours_ids))
     mpr = np.zeros(len(one_hop_neighbours_ids))
 
@@ -107,8 +110,8 @@ class Agent:
         self.id = agent_id
         self.name = str(agent_id)
         self.state = State() if state is None else state
+        # local_view is used by scripted heuristics
         self.local_view = local_view
-        self.geometric_data = from_networkx(local_view)
         self.size = size
         self.pos = pos
         self.color = color
@@ -126,24 +129,19 @@ class Agent:
         self.actions_history = np.zeros((4,))
         self.topic_of_interest = topic_of_interest
 
-    def reset(self, local_view, pos, one_hop_neighbours_ids):
-        """
-        Re-initialize the Agent with its existing 'state' object so that 'received_from'
-        and other arrays remain the same instance (or re-create them).
-        """
+    def reset(self, local_view, pos, one_hop_neighbors_ids):
         self.__init__(
             agent_id=self.id,
             local_view=local_view,
             state=self.state,
             pos=pos,
-            one_hop_neighbors_ids=one_hop_neighbours_ids,
+            one_hop_neighbors_ids=one_hop_neighbors_ids,
             is_scripted=self.is_scripted,
             topic_of_interest=self.topic_of_interest
         )
 
     def update_local_view(self, local_view):
         self.local_view = local_view
-        self.geometric_data = from_networkx(local_view)
 
     def has_received_from_relayed_node(self):
         return sum([
@@ -174,7 +172,6 @@ class World:
             random_graph=False,
             dynamic_graph=False,
             all_agents_source=False,
-            # Optional: number of test episodes we plan to run in a testing phase
             num_test_episodes=10
     ):
         self.selected_graph = None
@@ -189,7 +186,6 @@ class World:
         self.random_graph = random_graph
         self.dynamic_graph = dynamic_graph
         self.agents = None
-        # The main RNG
         self.np_random = np_random
         self.is_testing = is_testing
         self.pre_move_graph = None
@@ -239,7 +235,7 @@ class World:
         return [agent for agent in self.agents if agent.action_callback is not None]
 
     def step(self):
-        # Scripted agents choose their actions
+        # Scripted agents pick actions
         for agent in self.scripted_agents:
             agent.suppl_mpr = agent.action_callback(
                 agent.one_hop_neighbours_ids,
@@ -251,31 +247,30 @@ class World:
             for idx in relay_indices:
                 self.agents[idx].state.relays_for[agent.id] = 1
 
-        # Convert MPR-based decisions into actual actions
         for agent in self.scripted_agents:
             agent.action = 0
             if not agent.state.has_taken_action and (
-                    sum(agent.state.received_from) or agent.state.message_origin):
+                    sum(agent.state.received_from) or agent.state.message_origin
+            ):
                 if agent.has_received_from_relayed_node() or agent.state.message_origin:
                     agent.action = 1
                 agent.state.has_taken_action = 1
 
-        # Update states based on actions
+        # Update environment logic
         for agent in self.agents:
             logging.debug(
-                f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}")
+                f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}"
+            )
             self.update_agent_state(agent)
 
-        # Move graph if dynamic
         if self.dynamic_graph:
             self.move_graph()
 
-        # Update features, local graphs
-        for agent in self.agents:
-            self.update_agent_features(agent)
+        # Update local graphs
         for agent in self.agents:
             self.update_local_graph(agent)
 
+        # Clear MPR for next step
         for agent in self.scripted_agents:
             agent.state.relays_for = np.zeros(self.num_agents)
 
@@ -284,41 +279,13 @@ class World:
             agent.state.transmitted_to += agent.one_hop_neighbours_ids
             self.messages_transmitted += 1
             agent.messages_transmitted += 1
-            agent.actions_history[agent.steps_taken - 1] = agent.action
+            if agent.steps_taken is not None and agent.steps_taken > 0:
+                agent.actions_history[agent.steps_taken - 1] = agent.action
 
             neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
             for idx in neighbor_indices:
                 self.agents[idx].state.received_from[agent.id] += 1
                 self.agents[idx].state.carried_topic = agent.state.carried_topic
-
-    def update_agent_features(self, agent):
-        self.graph.nodes[agent.id]['features_critic'] = [
-            sum(agent.one_hop_neighbours_ids),
-            agent.messages_transmitted,
-            agent.steps_taken,
-            agent.topic_of_interest,
-            agent.state.carried_topic
-        ]
-
-        self.graph.nodes[agent.id]['features_actor'] = [
-            sum(agent.one_hop_neighbours_ids),
-            agent.messages_transmitted,
-            agent.action if agent.action is not None else 0,
-            agent.topic_of_interest,
-            agent.state.carried_topic
-        ]
-
-    def update_local_graph(self, agent):
-        local_graph = nx.ego_graph(self.graph, agent.id, undirected=True)
-        edges = list(local_graph.edges())
-        # Keep only edges that include the agent
-        for edge in edges:
-            if agent.id not in edge:
-                local_graph.remove_edge(*edge)
-
-        agent.update_local_view(local_graph)
-        agent.update_two_hop_cover_from_one_hopper(self.agents)
-
 
     def move_graph(self):
         self.pre_move_graph = self.graph.copy()
@@ -330,15 +297,25 @@ class World:
         for agent in self.agents:
             self.update_two_hop_neighbors(agent)
 
+    def update_local_graph(self, agent):
+        local_graph = nx.ego_graph(self.graph, agent.id, undirected=True)
+        edges = list(local_graph.edges())
+        for edge in edges:
+            if agent.id not in edge:
+                local_graph.remove_edge(*edge)
+        agent.update_local_view(local_graph)
+        agent.update_two_hop_cover_from_one_hopper(self.agents)
+
     def update_position(self, step):
         pos = nx.get_node_attributes(self.graph, "pos")
         offset_x, offset_y = self.compute_random_movement(step)
-        pos = {k: [v[0] + offset_x[k], v[1] + offset_y[k]] for k, v in pos.items()}
-        nx.set_node_attributes(self.graph, pos, "pos")
+        new_pos = {}
+        for k, v in pos.items():
+            new_pos[k] = [v[0] + offset_x[k], v[1] + offset_y[k]]
+        nx.set_node_attributes(self.graph, new_pos, "pos")
 
         for i in range(self.num_agents):
-            self.agents[i].pos[0] += offset_x[i]
-            self.agents[i].pos[1] += offset_y[i]
+            self.agents[i].pos = new_pos[i]
 
         new_edges = nx.geometric_edges(self.graph, radius=constants.RADIUS_OF_INFLUENCE)
         old_edges = list(self.graph.edges())
@@ -361,9 +338,9 @@ class World:
     def update_two_hop_neighbors(self, agent):
         agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids.copy()
         for agent_index in self.graph.neighbors(agent.id):
+            neighbor_1hop = self.agents[agent_index].one_hop_neighbours_ids
             agent.two_hop_neighbours_ids = np.logical_or(
-                self.graph.nodes[agent_index]['one_hop'].astype(int),
-                agent.two_hop_neighbours_ids.astype(int)
+                agent.two_hop_neighbours_ids, neighbor_1hop
             ).astype(int)
         agent.two_hop_neighbours_ids[agent.id] = 0
 
@@ -419,12 +396,14 @@ class World:
         self.messages_transmitted = 0
         self.origin_agent = chosen_source_id
 
+        # Suppose self.graph is already loaded or created
+        # Build agent objects
         for i in range(self.num_agents):
-            lv = nx.ego_graph(self.graph, i, undirected=True)
-            agent_interest = ep_rng.choice(self.available_topics)
+            local_graph = nx.ego_graph(self.graph, i, undirected=True)
+            agent_interest = self.np_random.choice(self.available_topics)
             new_agent = Agent(
                 i,
-                lv,
+                local_graph,
                 is_scripted=self.is_scripted,
                 topic_of_interest=agent_interest
             )
@@ -433,29 +412,25 @@ class World:
         for agent in self.agents:
             agent.state.reset(self.num_agents)
             self.update_one_hop_neighbors(agent)
-            self.graph.nodes[agent.id]['features_actor'] = np.zeros((6,))
-            self.graph.nodes[agent.id]['features_critic'] = np.zeros((7,))
             self.graph.nodes[agent.id]['label'] = agent.id
 
         for agent in self.agents:
             agent.reset(
                 local_view=nx.ego_graph(self.graph, agent.id, undirected=True),
                 pos=self.graph.nodes[agent.id]['pos'],
-                one_hop_neighbours_ids=agent.one_hop_neighbours_ids
+                one_hop_neighbors_ids=agent.one_hop_neighbours_ids
             )
             self.update_two_hop_neighbors(agent)
             agent.steps_taken = 0
             agent.truncated = False
-            self.update_agent_features(agent)
 
-        # Mark the source agent
-        source_agent = self.agents[self.origin_agent]
+        # Mark source
+        source_agent = self.agents[chosen_source_id]
         source_agent.state.message_origin = 1
         source_agent.action = 1
         source_agent.steps_taken = 1
         source_agent.state.carried_topic = self.current_topic
 
-        # Let them transmit immediately
         self.step()
 
 

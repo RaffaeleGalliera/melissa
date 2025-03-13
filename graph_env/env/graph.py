@@ -1,7 +1,6 @@
 import functools
 import logging
-from typing import TypeVar
-ActionType = TypeVar("ActionType")
+from typing import TypeVar, Optional, Dict, Any
 
 import gymnasium
 import networkx as nx
@@ -10,12 +9,15 @@ from pettingzoo import AECEnv
 from pettingzoo.utils import wrappers
 import numpy as np
 from tianshou.data.batch import Batch
+
+import matplotlib.pyplot as plt
+
 from .utils.constants import NUMBER_OF_FEATURES, RENDER_PAUSE
 from .utils.core import World
 from .utils.selector import CustomSelector
-from torch_geometric.utils import from_networkx
 
-import matplotlib.pyplot as plt
+
+ActionType = TypeVar("ActionType")
 
 
 class GraphEnv(AECEnv):
@@ -71,16 +73,23 @@ class GraphEnv(AECEnv):
         )
         self._agent_selector = CustomSelector(self.agents)
 
+        # Store a shared obs matrix that we'll update incrementally.
+        # Shape: (number_of_agents, 2 + NUMBER_OF_FEATURES)
+        self.obs_matrix = np.zeros(
+            (self.number_of_agents, 2 + NUMBER_OF_FEATURES), dtype=np.float32
+        )
+
         # set observation/action spaces
-        self.action_spaces = dict()
-        self.observation_spaces = dict()
-        state_dim = 0
-        obs_dim = NUMBER_OF_FEATURES
+        # Flattened dimension: N * (2 + NUMBER_OF_FEATURES) + 1 controlling agent index
+        obs_dim = self.number_of_agents * (2 + NUMBER_OF_FEATURES) + 1
+
+        self.action_spaces = {}
+        self.observation_spaces = {}
         for agent in self.world.agents:
             self.observation_spaces[agent.name] = gymnasium.spaces.Dict({
                 'observation': gymnasium.spaces.Box(
-                    low=0,
-                    high=100,
+                    low=-1e6,
+                    high=1e6,
                     shape=(obs_dim,),
                     dtype=np.float32,
                 ),
@@ -91,13 +100,12 @@ class GraphEnv(AECEnv):
                     dtype=np.int8,
                 ),
             })
-            state_dim += obs_dim
             self.action_spaces[agent.name] = gymnasium.spaces.Discrete(2)
 
         self.state_space = gymnasium.spaces.Box(
-            low=0,
-            high=10,
-            shape=(state_dim,),
+            low=-1e6,
+            high=1e6,
+            shape=(obs_dim,),
             dtype=np.float32,
         )
 
@@ -187,10 +195,32 @@ class GraphEnv(AECEnv):
             },
         }
 
+    def observation_space(self, agent):
+        return self.observation_spaces[agent]
+
+    def action_space(self, agent):
+        return self.action_spaces[agent]
+
     def observe(self, agent: str):
+        """
+        Return a single flattened array representing the entire 'obs_matrix'
+        plus the controlling-agent index appended at the end.
+        This means each agent sees the full global state.
+        """
+        # controlling index
+        controlling_idx = self.agent_name_mapping[agent]
+        # flatten shape (number_of_agents*(2+NUMBER_OF_FEATURES),)
+        obs_flat = self.obs_matrix.reshape(-1)
+        # append controlling-agent index => shape (... + 1,)
+        obs_final = np.concatenate([obs_flat, [controlling_idx]]).astype(np.float32)
+
+        action_mask = np.array([1, 1], dtype=np.int8)
+        if self.terminations[agent] or self.truncations[agent]:
+            action_mask = np.array([0, 0], dtype=np.int8)
+
         self.infos[agent]['env_step'] = self.num_moves
         self.infos[agent]['environment_step'] = False
-        self.infos[agent]["explicit_reset"] = False
+        self.infos[agent]['explicit_reset'] = False
 
         if all(value for key, value in self.terminations.items() if key in self.agents) and len(self.agents) == 1:
             self.is_new_round = False
@@ -200,50 +230,16 @@ class GraphEnv(AECEnv):
             self.infos[agent]['environment_step'] = True
             self.is_new_round = False
 
-        return self.observation(
-            self.world.agents[self.agent_name_mapping[agent]]
-        )
+        return {
+            "observation": obs_final,
+            "action_mask": action_mask
+        }
 
     def state(self):
-        states = tuple(
-            self.observation(
-                self.world.agents[self.agent_name_mapping[agent]]
-            )
-            for agent in self.possible_agents
-        )
-        return np.concatenate(states, axis=None)
-
-    def observation(self, agent):
-        agent_observation = agent.geometric_data
-        one_hop_neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
-        active_one_hop = [
-            neighbor
-            for neighbor in one_hop_neighbor_indices
-            if not self.world.agents[neighbor].truncated and str(neighbor) in self.agents
-        ]
-
-        edge_index = np.asarray(agent_observation.edge_index, dtype=np.int32)
-        features = np.asarray(agent_observation.features_actor, dtype=np.float32)
-
-        network = from_networkx(self.world.graph)
-        network_edge_index = np.asarray(network.edge_index, np.int32)
-        network_features = np.asarray(network.features_actor, dtype=np.float32)
-        labels = np.asarray(network.label, dtype=object)
-
-        data = Batch.stack([
-            Batch(observation=edge_index),
-            Batch(observation=labels),
-            Batch(observation=features),
-            Batch(observation=np.where(labels == agent.id)),
-            Batch(observation=network_edge_index),
-            Batch(observation=network_features),
-            Batch(observation=active_one_hop)
-        ])
-
-        return data
+        # If you need a global state, just flatten self.obs_matrix
+        return self.obs_matrix.reshape(-1)
 
     def reset(self, seed=None, return_info=False, options=None):
-        # Optionally reseed environment if user passes a new seed
         if seed is not None:
             self.seed(seed=seed)
         self.world.np_random = self.np_random
@@ -258,9 +254,12 @@ class GraphEnv(AECEnv):
         self.num_moves = 0
 
         self.world.reset()
-
         self.episode_rewards_sum = 0.0
 
+        # Initialize and fill in self.obs_matrix for all agents
+        self._init_obs_matrix()
+
+        # Filter out agents that have the message, etc.
         self.agents = [
             agent.name for agent in self.world.agents
             if (sum(agent.state.received_from) and not agent.state.message_origin)
@@ -270,38 +269,36 @@ class GraphEnv(AECEnv):
         self.agent_selection = self._agent_selector.next()
         self.current_actions = [None] * self.number_of_agents
 
-    def _was_dead_step(self, action: ActionType) -> None:
+    def _init_obs_matrix(self):
         """
-        Same default was_dead_step method used by PettingZoo, but avoids clearing
-        rewards for all agents at the end.
+        Initialize self.obs_matrix from scratch, used at the start of an episode.
         """
-        if action is not None:
-            raise ValueError("when an agent is dead, the only valid action is None")
+        for i, ag in enumerate(self.world.agents):
+            self._update_obs_matrix_for_agent(i, ag)
 
-        agent = self.agent_selection
-        assert (
-            self.terminations[agent] or self.truncations[agent]
-        ), "an agent that was not dead attempted to be removed"
-        del self.terminations[agent]
-        del self.truncations[agent]
-        del self.rewards[agent]
-        del self._cumulative_rewards[agent]
-        del self.infos[agent]
-        self.agents.remove(agent)
+    def _update_obs_matrix_for_agent(self, idx: int, agent_obj):
+        """
+        Update the row self.obs_matrix[idx] to reflect the agent’s
+        latest pos, message status, steps_taken, etc.
+        Customize the layout to match your desired columns.
+        Example layout:
+            0: pos_x
+            1: pos_y
+            2: has_message
+            3: topic_of_interest
+            4: carried_topic
+            5: steps_taken
+            ...
+        """
+        pos_x, pos_y = agent_obj.pos
 
-        _deads_order = [
-            agent
-            for agent in self.agents
-            if (self.terminations[agent] or self.truncations[agent])
-        ]
-        if _deads_order:
-            if getattr(self, "_skip_agent_selection", None) is None:
-                self._skip_agent_selection = self.agent_selection
-            self.agent_selection = _deads_order[0]
-        else:
-            if getattr(self, "_skip_agent_selection", None) is not None:
-                self.agent_selection = self._skip_agent_selection
-            self._skip_agent_selection = None
+        self.obs_matrix[idx, 0] = pos_x
+        self.obs_matrix[idx, 1] = pos_y
+        self.obs_matrix[idx, 2] = sum(agent_obj.one_hop_neighbours_ids)
+        self.obs_matrix[idx, 3] = agent_obj.messages_transmitted
+        self.obs_matrix[idx, 4] = agent_obj.action if agent_obj.action is not None else 0
+        self.obs_matrix[idx, 5] = agent_obj.topic_of_interest
+        self.obs_matrix[idx, 6] = agent_obj.state.carried_topic if agent_obj.state.carried_topic is not None else -1
 
     def step(self, action):
         if (
@@ -373,6 +370,11 @@ class GraphEnv(AECEnv):
             self._set_action(scenario_action, agent, self.action_spaces[agent.name])
 
         self.world.step()
+
+        # Now that the environment might have changed (message states, etc.),
+        # update obs rows for all agents
+        for i, ag in enumerate(self.world.agents):
+            self._update_obs_matrix_for_agent(i, ag)
 
         global_reward = 0.0
         if self.local_ratio is not None:
@@ -491,10 +493,10 @@ def draw_graph(graph, agent_list):
 
 def make_env(raw_env):
     def env(**kwargs):
-        env = raw_env(**kwargs)
-        env = wrappers.AssertOutOfBoundsWrapper(env)
-        env = wrappers.OrderEnforcingWrapper(env)
-        return env
+        env_ = raw_env(**kwargs)
+        env_ = wrappers.AssertOutOfBoundsWrapper(env_)
+        env_ = wrappers.OrderEnforcingWrapper(env_)
+        return env_
     return env
 
 
