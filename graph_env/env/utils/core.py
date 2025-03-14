@@ -400,7 +400,7 @@ class World:
         # Build agent objects
         for i in range(self.num_agents):
             local_graph = nx.ego_graph(self.graph, i, undirected=True)
-            agent_interest = self.np_random.choice(self.available_topics)
+            agent_interest = ep_rng.choice(self.available_topics)
             new_agent = Agent(
                 i,
                 local_graph,
@@ -424,8 +424,8 @@ class World:
             agent.steps_taken = 0
             agent.truncated = False
 
-        # Mark source
-        source_agent = self.agents[chosen_source_id]
+        # Mark the source agent
+        source_agent = self.agents[self.origin_agent]
         source_agent.state.message_origin = 1
         source_agent.action = 1
         source_agent.steps_taken = 1

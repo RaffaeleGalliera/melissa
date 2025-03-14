@@ -300,6 +300,39 @@ class GraphEnv(AECEnv):
         self.obs_matrix[idx, 5] = agent_obj.topic_of_interest
         self.obs_matrix[idx, 6] = agent_obj.state.carried_topic if agent_obj.state.carried_topic is not None else -1
 
+    def _was_dead_step(self, action: ActionType) -> None:
+        """
+        Same default was_dead_step method used by PettingZoo, but avoids clearing
+        rewards for all agents at the end.
+        """
+        if action is not None:
+            raise ValueError("when an agent is dead, the only valid action is None")
+
+        agent = self.agent_selection
+        assert (
+            self.terminations[agent] or self.truncations[agent]
+        ), "an agent that was not dead attempted to be removed"
+        del self.terminations[agent]
+        del self.truncations[agent]
+        del self.rewards[agent]
+        del self._cumulative_rewards[agent]
+        del self.infos[agent]
+        self.agents.remove(agent)
+
+        _deads_order = [
+            agent
+            for agent in self.agents
+            if (self.terminations[agent] or self.truncations[agent])
+        ]
+        if _deads_order:
+            if getattr(self, "_skip_agent_selection", None) is None:
+                self._skip_agent_selection = self.agent_selection
+            self.agent_selection = _deads_order[0]
+        else:
+            if getattr(self, "_skip_agent_selection", None) is not None:
+                self.agent_selection = self._skip_agent_selection
+            self._skip_agent_selection = None
+
     def step(self, action):
         if (
             self.terminations[self.agent_selection]
