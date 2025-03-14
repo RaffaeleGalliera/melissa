@@ -10,7 +10,7 @@ from tianshou.utils.net.common import MLP
 from torch_geometric.nn import GATv2Conv
 from torch_geometric.nn import global_max_pool
 
-from graph_env.env.utils.constants import NUMBER_OF_FEATURES
+from graph_env.env.utils.constants import NUMBER_OF_FEATURES, RADIUS_OF_INFLUENCE
 
 
 def build_pyg_batch_time(obs: torch.Tensor, radius: float, device: torch.device, input_dim: int) -> tuple:
@@ -177,7 +177,7 @@ class LDGNNetwork(nn.Module):
         # 2) Build PyG Data
         data, agent_indices, bs_size = build_pyg_batch_time(
             obs,
-            radius=NUMBER_OF_FEATURES,
+            radius=RADIUS_OF_INFLUENCE,
             device=self.device,
             input_dim=self.input_dim
         )
