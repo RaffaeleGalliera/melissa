@@ -369,6 +369,8 @@ class World:
             self.movement_np_random = np.random.RandomState(movement_seed)
 
             chosen_source_id = ep_rng.randint(0, self.num_agents)
+            fixed_interest_densities = [i / 10.0 for i in range(1, 11)]
+            interest_density = fixed_interest_densities[self.test_episode_index % len(fixed_interest_densities)]
         else:
             episode_seed = self.np_random.integers(0, 1e9)
             ep_rng = np.random.RandomState(episode_seed)
@@ -383,13 +385,14 @@ class World:
             self.movement_np_random = np.random.RandomState(movement_seed)
 
             chosen_source_id = ep_rng.randint(0, self.num_agents)
+            interest_density = ep_rng.uniform(0.0, 1.0) if self.fixed_interest_density is None else self.fixed_interest_density
+
 
         self.agents = []
         self.messages_transmitted = 0
         self.origin_agent = chosen_source_id
 
         # Assign interest to a fraction of agents
-        interest_density = ep_rng.uniform(0.0, 1.0) if self.fixed_interest_density is None else self.fixed_interest_density
         num_interested = int(interest_density * self.num_agents)
         interested_indices = ep_rng.choice(self.num_agents, size=num_interested, replace=False)
 
