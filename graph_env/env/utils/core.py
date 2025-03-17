@@ -82,7 +82,7 @@ class State:
         self.relayed_by = None
         self.message_origin = 0
         self.has_taken_action = 0
-        self.carried_topic = None
+        self.has_message = 0
 
     def reset(self, num_agents):
         self.received_from = np.zeros(num_agents)
@@ -91,7 +91,7 @@ class State:
         self.relayed_by = np.zeros(num_agents)
         self.message_origin = 0
         self.has_taken_action = 0
-        self.carried_topic = -1
+        self.has_message = 0
 
 
 class Agent:
@@ -105,29 +105,34 @@ class Agent:
             pos=None,
             one_hop_neighbors_ids=None,
             is_scripted=False,
-            topic_of_interest=None
+            is_interested=False
     ):
         self.id = agent_id
         self.name = str(agent_id)
         self.state = State() if state is None else state
         # local_view is used by scripted heuristics
         self.local_view = local_view
+
         self.size = size
         self.pos = pos
         self.color = color
+
         self.one_hop_neighbours_ids = one_hop_neighbors_ids
         self.two_hop_neighbours_ids = None
         self.two_hop_cover = 0
         self.gained_two_hop_cover = 0
+
         self.action = None
         self.is_scripted = is_scripted
         self.action_callback = mpr_heuristic if self.is_scripted else None
         self.suppl_mpr = None
+
         self.steps_taken = None
         self.truncated = None
         self.messages_transmitted = 0
         self.actions_history = np.zeros((4,))
-        self.topic_of_interest = topic_of_interest
+
+        self.is_interested = is_interested
 
     def reset(self, local_view, pos, one_hop_neighbors_ids):
         self.__init__(
@@ -137,7 +142,7 @@ class Agent:
             pos=pos,
             one_hop_neighbors_ids=one_hop_neighbors_ids,
             is_scripted=self.is_scripted,
-            topic_of_interest=self.topic_of_interest
+            is_interested=self.is_interested
         )
 
     def update_local_view(self, local_view):
@@ -154,7 +159,7 @@ class Agent:
         two_hop_neighbor_indices = np.where(self.two_hop_neighbours_ids)[0]
         new_two_hop_cover = sum(
             1 for idx in two_hop_neighbor_indices
-            if sum(agents[idx].state.received_from) or agents[idx].state.message_origin
+            if (agents[idx].state.has_message == 1 or agents[idx].state.message_origin == 1)
         )
         self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
         self.two_hop_cover = new_two_hop_cover
@@ -172,7 +177,8 @@ class World:
             random_graph=False,
             dynamic_graph=False,
             all_agents_source=False,
-            num_test_episodes=10
+            num_test_episodes=10,
+            fixed_interest_density=None
     ):
         self.selected_graph = None
         self.messages_transmitted = 1
@@ -194,11 +200,8 @@ class World:
         self.movement_np_random_state = None
         self.max_node_degree = constants.MAX_NODE_DEGREE
 
-        # Possible topics in the environment
-        self.available_topics = [0, 1, 2, 3]
-        self.current_topic = None
+        self.fixed_interest_density = fixed_interest_density
 
-        # Gathers graphs
         if self.is_testing:
             if self.max_node_degree:
                 self.test_graphs = sorted(glob.glob(
@@ -249,8 +252,8 @@ class World:
 
         for agent in self.scripted_agents:
             agent.action = 0
-            if not agent.state.has_taken_action and (
-                    sum(agent.state.received_from) or agent.state.message_origin
+            if (not agent.state.has_taken_action) and (
+                agent.state.has_message == 1 or agent.state.message_origin
             ):
                 if agent.has_received_from_relayed_node() or agent.state.message_origin:
                     agent.action = 1
@@ -285,7 +288,7 @@ class World:
             neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
             for idx in neighbor_indices:
                 self.agents[idx].state.received_from[agent.id] += 1
-                self.agents[idx].state.carried_topic = agent.state.carried_topic
+                self.agents[idx].state.has_message = 1
 
     def move_graph(self):
         self.pre_move_graph = self.graph.copy()
@@ -346,16 +349,14 @@ class World:
 
     def reset(self):
         """
-        If in testing mode, we pick from `test_seeds_list` in a strict order.
-        If in training mode, we use `self.np_random` to pick a new seed each time.
+        If in testing mode, pick from `test_seeds_list` in strict order.
+        If in training mode, sample a new seed from self.np_random.
         """
         if self.is_testing:
             if not self.test_seeds_list:
                 raise ValueError("No test seeds have been generated! Check num_test_episodes.")
-            # Current seed from the pre-generated list
             episode_seed = self.test_seeds_list[self.test_episode_index]
             self.test_episode_index = (self.test_episode_index + 1) % self.num_test_episodes
-            # A local RNG for this episode
             ep_rng = np.random.RandomState(episode_seed)
 
             if not self.test_graphs:
@@ -367,9 +368,7 @@ class World:
             movement_seed = ep_rng.randint(0, 1e9)
             self.movement_np_random = np.random.RandomState(movement_seed)
 
-            self.current_topic = ep_rng.choice(self.available_topics)
             chosen_source_id = ep_rng.randint(0, self.num_agents)
-
         else:
             episode_seed = self.np_random.integers(0, 1e9)
             ep_rng = np.random.RandomState(episode_seed)
@@ -380,35 +379,33 @@ class World:
                 self.selected_graph = self.np_random.choice(self.train_graphs, replace=True)
                 self.graph = load_graph(self.selected_graph)
 
-            # Movement random
             movement_seed = ep_rng.randint(0, 1e9)
             self.movement_np_random = np.random.RandomState(movement_seed)
 
-            # Topic
-            self.current_topic = ep_rng.choice(self.available_topics)
-            # Source agent
             chosen_source_id = ep_rng.randint(0, self.num_agents)
 
-        # ------------------------------------------------------------------
-        # Now we create agents, reset states, etc.
-        # ------------------------------------------------------------------
         self.agents = []
         self.messages_transmitted = 0
         self.origin_agent = chosen_source_id
 
-        # Suppose self.graph is already loaded or created
-        # Build agent objects
+        # Assign interest to a fraction of agents
+        interest_density = ep_rng.uniform(0.0, 1.0) if self.fixed_interest_density is None else self.fixed_interest_density
+        num_interested = int(interest_density * self.num_agents)
+        interested_indices = ep_rng.choice(self.num_agents, size=num_interested, replace=False)
+
+        # Build agents
         for i in range(self.num_agents):
             local_graph = nx.ego_graph(self.graph, i, undirected=True)
-            agent_interest = ep_rng.choice(self.available_topics)
+            is_int = (i in interested_indices)
             new_agent = Agent(
                 i,
                 local_graph,
                 is_scripted=self.is_scripted,
-                topic_of_interest=agent_interest
+                is_interested=is_int
             )
             self.agents.append(new_agent)
 
+        # Initialize each agent's arrays and neighbors
         for agent in self.agents:
             agent.state.reset(self.num_agents)
             self.update_one_hop_neighbors(agent)
@@ -424,12 +421,12 @@ class World:
             agent.steps_taken = 0
             agent.truncated = False
 
-        # Mark the source agent
+        # Mark the source agent: it originates the message
         source_agent = self.agents[self.origin_agent]
         source_agent.state.message_origin = 1
+        source_agent.state.has_message = 1
         source_agent.action = 1
         source_agent.steps_taken = 1
-        source_agent.state.carried_topic = self.current_topic
 
         self.step()
 
@@ -443,9 +440,11 @@ def create_connected_graph(n, radius):
             logging.debug("Generated graph not connected, retry")
     return graph
 
+
 def load_graph(path="testing_graph.gpickle"):
     with open(path, "rb") as f:
         return pickle.load(f)
+
 
 def save_graph(graph, path="testing_graph.gpickle"):
     with open(path, "wb") as f:

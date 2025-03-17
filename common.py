@@ -41,6 +41,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument('--dueling-q-hidden-sizes', type=int, nargs='*', default=[128, 128])
     parser.add_argument('--dueling-v-hidden-sizes', type=int, nargs='*', default=[128, 128])
     parser.add_argument("--aggregator-function", type=str, default="global_max_pool")
+    parser.add_argument("--edge-attributes", action="store_true", default=False)
     parser.add_argument(
         "--device",
         type=str,

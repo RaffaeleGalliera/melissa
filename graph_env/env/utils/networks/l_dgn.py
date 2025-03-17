@@ -10,10 +10,10 @@ from tianshou.utils.net.common import MLP
 from torch_geometric.nn import GATv2Conv
 from torch_geometric.nn import global_max_pool
 
-from graph_env.env.utils.constants import NUMBER_OF_FEATURES, RADIUS_OF_INFLUENCE
+from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE
 
 
-def build_pyg_batch_time(obs: torch.Tensor, radius: float, device: torch.device, input_dim: int) -> tuple:
+def build_pyg_batch_time(obs: torch.Tensor, radius: float, device: torch.device, input_dim: int, edge_attributes: bool) -> tuple:
     """
     Expects obs of shape (bs, N*input_dim + 1). For example, if:
       - input_dim=7 columns per node
@@ -71,10 +71,9 @@ def build_pyg_batch_time(obs: torch.Tensor, radius: float, device: torch.device,
     )
     data.ptr = torch.arange(0, (bs + 1) * N, step=N, device=device)
 
-
-    # Optional transforms
-    data = Cartesian(norm=False, cat=True)(data)
-    data = Distance(norm=False)(data)
+    if edge_attributes:
+        data = Cartesian(norm=False, cat=True)(data)
+        data = Distance(norm=False)(data)
 
     # controlling agent index is the last column
     agent_indices = obs[:, -1].clamp(0, N - 1).long().to(device)
@@ -95,10 +94,9 @@ class LDGNNetwork(nn.Module):
             hidden_dim: int,
             output_dim: int,
             num_heads: int,
-            features_only: bool = False,
             dueling_param: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None,
             device: str = 'cpu',
-            aggregator_function=global_max_pool  # unused in this approach
+            edge_attributes = False
     ):
         super(LDGNNetwork, self).__init__()
         self.device = device
@@ -106,6 +104,7 @@ class LDGNNetwork(nn.Module):
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.num_heads = num_heads
+        self.edge_attributes = edge_attributes
         # We'll produce embeddings from each layer, so the final dimension is hidden_dim*heads for each layer
         # but we cat them from 3 "snapshots" => x_1, x_2, x_3 => total = hidden_dim*heads * 3
         # plus the initial "encoder" snapshot if you want x_0 as well. The old code only does 3 snapshots:
@@ -179,7 +178,8 @@ class LDGNNetwork(nn.Module):
             obs,
             radius=RADIUS_OF_INFLUENCE,
             device=self.device,
-            input_dim=self.input_dim
+            input_dim=self.input_dim,
+            edge_attributes=self.edge_attributes
         )
 
         # 3) MLP encoder

@@ -62,7 +62,7 @@ def get_agents(
             args.num_heads,
             device=args.device,
             dueling_param=(q_param, v_param),
-            aggregator_function=aggregator
+            edge_attributes=args.edge_attributes
         )
 
         # Optimizer
@@ -309,7 +309,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         args.num_heads,
         device=args.device,
         dueling_param=(q_param, v_param),
-        aggregator_function=aggregator
+        edge_attributes=args.edge_attributes
     )
 
     optim = torch.optim.Adam(net.parameters(), lr=args.lr)
