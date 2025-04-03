@@ -146,7 +146,6 @@ def train_agent(
         lambda: get_env(
             number_of_agents=args.n_agents,
             dynamic_graph=args.dynamic_graph,
-            # render_mode="human",
         )
         for _ in range(1)
     ])
@@ -223,6 +222,7 @@ def train_agent(
         best_path = os.path.join(weights_path, f"{args.model_name}_best.pth")
         print(f"Saving best model to {best_path}")
         torch.save(pol.policy.state_dict(), best_path)
+        logger.wandb_run.save(best_path)
 
     def train_fn(epoch: int, env_step: int):
         """
@@ -286,6 +286,7 @@ def train_agent(
     last_path = os.path.join(weights_path, f"{args.model_name}_last.pth")
     print(f"Saving last model to {last_path}")
     torch.save(masp_policy.policy.state_dict(), last_path)
+    logger.wandb_run.save(last_path)
 
     return result, masp_policy
 

@@ -127,8 +127,6 @@ class GraphEnv(AECEnv):
             return
 
         if self.render_mode == "human" and self.world.agents:
-            if self.world.dynamic_graph:
-                draw_graph(self.world.pre_move_graph, self.world.pre_move_agents)
             draw_graph(self.world.graph, self.world.agents)
         return
 
