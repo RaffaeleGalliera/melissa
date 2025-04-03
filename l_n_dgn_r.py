@@ -62,9 +62,10 @@ def get_agents(
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
+            agents_num=args.n_agents,
             device=args.device,
             dueling_param=(q_param, v_param),
-            aggregator_function=aggregator
+            edge_attributes=args.edge_attributes
         )
 
         # Optimizer
@@ -144,9 +145,10 @@ def train_agent(
     train_envs = SubprocVectorEnv([
         lambda: get_env(
             number_of_agents=args.n_agents,
-            dynamic_graph=args.dynamic_graph
+            dynamic_graph=args.dynamic_graph,
+            # render_mode="human",
         )
-        for _ in range(args.training_num)
+        for _ in range(1)
     ])
     test_envs = SubprocVectorEnv([
         lambda: get_env(
@@ -309,9 +311,10 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         args.hidden_emb,
         args.action_shape,
         args.num_heads,
+        agents_num=args.n_agents,
         device=args.device,
         dueling_param=(q_param, v_param),
-        aggregator_function=aggregator
+        edge_attributes=args.edge_attributes
     )
 
     optim = torch.optim.Adam(net.parameters(), lr=args.lr)

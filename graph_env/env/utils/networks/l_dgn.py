@@ -13,7 +13,14 @@ from torch_geometric.nn import global_max_pool
 from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE
 
 
-def build_pyg_batch_time(obs: torch.Tensor, radius: float, device: torch.device, input_dim: int, edge_attributes: bool) -> tuple:
+def build_pyg_batch_time(
+        obs: torch.Tensor,
+        radius: float,
+        device: torch.device,
+        input_dim: int,
+        edge_attributes: bool,
+        agents_num: int
+) -> tuple:
     """
     Expects obs of shape (bs, N*input_dim + 1). For example, if:
       - input_dim=7 columns per node
@@ -36,20 +43,18 @@ def build_pyg_batch_time(obs: torch.Tensor, radius: float, device: torch.device,
     """
     if obs.ndim != 2:
         raise ValueError(f"Expected obs to be 2D, but got shape {obs.shape}")
-
     bs, dim = obs.shape  # e.g. (7, 141)
-    ncols_without_agent = dim - 1       # 140
+    ncols_without_agent = dim - 1     # 140
     # e.g. if input_dim=7 => N = 140 // 7 = 20
-    N = int(ncols_without_agent / (2 + input_dim))
-    if N * (2 + input_dim) != ncols_without_agent:
+    if agents_num * (2 + input_dim) != ncols_without_agent:
         raise ValueError(
             f"Mismatch: we have {ncols_without_agent} columns for nodes, "
-            f"but input_dim={input_dim} => N={N} leaves remainder. "
+            f"but input_dim={input_dim} => N={agents_num} leaves remainder. "
             f"obs.shape={obs.shape}"
         )
 
     # (bs, N, input_dim)
-    node_data = obs[:, :ncols_without_agent].reshape(-1, N, (2 + input_dim)).float()
+    node_data = obs[:, :ncols_without_agent].reshape(-1, agents_num, (2 + input_dim)).float()
 
     # flatten => (bs*N, input_dim)
     x_all = node_data.reshape(-1, (2 + input_dim)).to(device)
@@ -60,7 +65,7 @@ def build_pyg_batch_time(obs: torch.Tensor, radius: float, device: torch.device,
     node_feats = x_all[:, 2:]  # shape (bs*N, input_dim-2)
 
     # Build PyG Data
-    batch_vec = torch.arange(bs, device=device).repeat_interleave(N)
+    batch_vec = torch.arange(bs, device=device).repeat_interleave(agents_num)
     edge_index = radius_graph(pos, batch=batch_vec, r=radius, loop=False)
 
     data = Data(
@@ -69,14 +74,14 @@ def build_pyg_batch_time(obs: torch.Tensor, radius: float, device: torch.device,
         edge_index=edge_index,
         batch=batch_vec,
     )
-    data.ptr = torch.arange(0, (bs + 1) * N, step=N, device=device)
+    data.ptr = torch.arange(0, (bs + 1) * agents_num, step=agents_num, device=device)
 
     if edge_attributes:
         data = Cartesian(norm=False, cat=True)(data)
         data = Distance(norm=False)(data)
 
     # controlling agent index is the last column
-    agent_indices = obs[:, -1].clamp(0, N - 1).long().to(device)
+    agent_indices = obs[:, -1].clamp(0, agents_num - 1).long().to(device)
 
     return data, agent_indices, bs
 
@@ -94,9 +99,10 @@ class LDGNNetwork(nn.Module):
             hidden_dim: int,
             output_dim: int,
             num_heads: int,
+            agents_num: int,
             dueling_param: Optional[Tuple[Dict[str, Any], Dict[str, Any]]] = None,
             device: str = 'cpu',
-            edge_attributes = False
+            edge_attributes = False,
     ):
         super(LDGNNetwork, self).__init__()
         self.device = device
@@ -104,6 +110,7 @@ class LDGNNetwork(nn.Module):
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.num_heads = num_heads
+        self.agents_num = agents_num
         self.edge_attributes = edge_attributes
         # We'll produce embeddings from each layer, so the final dimension is hidden_dim*heads for each layer
         # but we cat them from 3 "snapshots" => x_1, x_2, x_3 => total = hidden_dim*heads * 3
@@ -179,7 +186,8 @@ class LDGNNetwork(nn.Module):
             radius=RADIUS_OF_INFLUENCE,
             device=self.device,
             input_dim=self.input_dim,
-            edge_attributes=self.edge_attributes
+            edge_attributes=self.edge_attributes,
+            agents_num=self.agents_num
         )
 
         # 3) MLP encoder

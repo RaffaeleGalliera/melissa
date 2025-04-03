@@ -196,6 +196,13 @@ class GraphEnv(AECEnv):
         self.infos[agent]['environment_step'] = False
         self.infos[agent]['explicit_reset'] = False
 
+        one_hop_neighbor_indices = self.world.agents[self.agent_name_mapping[agent]].one_hop_neighbours_ids.copy()
+        # filter out inactive neighbors
+        for idx, neighbor in enumerate(one_hop_neighbor_indices):
+            if self.world.agents[idx].truncated and not str(idx) in self.agents:
+                one_hop_neighbor_indices[idx] = 0
+        self.infos[agent]['active_one_hop_neighbors'] = np.array(one_hop_neighbor_indices, dtype=np.bool_)
+
         if all(value for key, value in self.terminations.items() if key in self.agents) and len(self.agents) == 1:
             self.is_new_round = False
             self.infos[agent]["explicit_reset"] = True

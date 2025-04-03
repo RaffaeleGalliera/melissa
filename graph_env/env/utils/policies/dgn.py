@@ -25,35 +25,45 @@ class DGNPolicy(DQNPolicy):
         self.optim.zero_grad()
         weight = batch.pop("weight", 1.0)
         device = 'cuda' if torch.cuda.is_available() else None
-        batch_q = torch.zeros((len(batch),), device=device)
-        batch_returns = torch.zeros((len(batch),), device=device)
+        batch_q = torch.zeros((len(batch), ), device=device)
+        batch_returns = torch.zeros((len(batch), ), device=device)
 
         for i, exp in enumerate(batch):
-            # Get ID indice np.where(batch.active_obs.index == batch.active_obs.index[1])s of active obs in the whole experiment
-            # TODO fix active obs should contain already only active obs thanks to collab shared policy
-            valid_indices = exp.info.indices[np.where(exp.info.indices >= 0)].astype(int)
+            # Need to handle graph stacking case
+            if len(exp.info.indices.shape) == 2:
+                indices = exp.info.indices[0]
+            else:
+                indices = exp.info.indices
 
-            # Get active active obs from batch filtering by obs index
-            active_obs = batch.active_obs[
+            # Get ID indices of active obs in the whole experiment
+            valid_indices = np.where(indices >= 0)
+
+            # Get active obs from batch filtering by obs index
+            active_obs = Batch(
                 [
-                    np.where(batch.active_obs.index == index)[0][0]
-                    for index in valid_indices
+                    batch.active_obs[
+                        np.where(batch.active_obs.index == index)[0][0]
+                    ] for index in indices[valid_indices]
                 ]
-            ]
-
+            )
             q = self(active_obs).logits
             q = q[np.arange(len(q)), active_obs.act]
 
-            returns = to_torch_as(active_obs.returns.flatten(), q)
             sum_q = q.sum()
-            sum_returns = returns.sum()
+            returns = exp.returns
             batch_q[i] = sum_q
-            batch_returns[i] = sum_returns
+            batch_returns[i] = returns
 
         td_error = batch_returns - batch_q
-        loss = (td_error.pow(2) * weight).mean()
 
-        batch.weight = td_error # prio-buffer
+        if self.clip_loss_grad:
+            y = batch_q.reshape(-1, 1)
+            t = batch_returns.reshape(-1, 1)
+            loss = torch.nn.functional.huber_loss(y, t, reduction="mean")
+        else:
+            loss = (td_error.pow(2) * weight).mean()
+
+        batch.weight = td_error  # prio-buffer
         loss.backward()
         self.optim.step()
         self._iter += 1

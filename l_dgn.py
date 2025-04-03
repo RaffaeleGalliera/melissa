@@ -60,6 +60,7 @@ def get_agents(
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
+            agents_num=args.n_agents,
             device=args.device,
             dueling_param=(q_param, v_param),
             edge_attributes=args.edge_attributes
@@ -307,6 +308,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         args.hidden_emb,
         args.action_shape,
         args.num_heads,
+        agents_num=args.n_agents,
         device=args.device,
         dueling_param=(q_param, v_param),
         edge_attributes=args.edge_attributes
