@@ -1,15 +1,11 @@
 import functools
-import logging
-from typing import TypeVar, Optional, Dict, Any
-
+from typing import TypeVar
 import gymnasium
 import networkx as nx
 from gymnasium.utils import seeding
 from pettingzoo import AECEnv
 from pettingzoo.utils import wrappers
 import numpy as np
-from tianshou.data.batch import Batch
-
 import matplotlib.pyplot as plt
 
 from .utils.constants import NUMBER_OF_FEATURES, RENDER_PAUSE
@@ -35,7 +31,8 @@ class GraphEnv(AECEnv):
             max_cycles=100,
             device='cuda',
             local_ratio=None,
-            is_scripted=False,
+            heuristic=None,
+            heuristic_params=None,
             is_testing=False,
             random_graph=False,
             dynamic_graph=False,
@@ -57,7 +54,8 @@ class GraphEnv(AECEnv):
             number_of_agents=self.number_of_agents,
             radius=radius,
             np_random=self.np_random,
-            is_scripted=is_scripted,
+            heuristic=heuristic,
+            heuristic_params=heuristic_params,
             is_testing=is_testing,
             random_graph=random_graph,
             dynamic_graph=dynamic_graph,
@@ -180,7 +178,7 @@ class GraphEnv(AECEnv):
     def observe(self, agent: str):
         """
         Return a flattened array representing self.obs_matrix plus the controlling-agent index at the end.
-        Each agent sees the full global state here.
+        Each agent sees the full global state here, filtering is gonna happen on the network side.
         """
         controlling_idx = self.agent_name_mapping[agent]
         obs_flat = self.obs_matrix.reshape(-1)

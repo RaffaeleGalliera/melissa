@@ -97,7 +97,8 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
     env = DummyVectorEnv([
         lambda: get_env(
             number_of_agents=args.n_agents,
-            is_scripted=args.mpr_policy,
+            heuristic=args.heuristic,
+            heuristic_params=args.heuristic_params,
             is_testing=True,
             dynamic_graph=args.dynamic_graph,
             render_mode="human",
@@ -127,7 +128,7 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
     )
 
     # Collect some episodes
-    result = collector.collect(n_episode=args.test_num * args.n_agents)
+    result = collector.collect(n_episode=args.test_num)
     pprint.pprint(result)
     time.sleep(5)
 
@@ -245,42 +246,22 @@ def train_agent(
         """
         masp_policy.policy.set_eps(args.eps_test)
 
-    # Decide trainer vs. optimizer
-    if not args.optimize:
-        result = OffpolicyTrainer(
-            policy=masp_policy,
-            train_collector=train_collector,
-            test_collector=test_collector,
-            max_epoch=args.epoch,
-            step_per_epoch=args.step_per_epoch,
-            step_per_collect=args.step_per_collect,
-            episode_per_test=args.test_num,
-            batch_size=args.batch_size,
-            train_fn=train_fn,
-            test_fn=test_fn,
-            update_per_step=args.update_per_step,
-            test_in_train=False,
-            save_best_fn=save_best_fn,
-            logger=logger
-        ).run()
-    else:
-        # hyperparameter optimization
-        result = offpolicy_optimizer(
-            policy=masp_policy,
-            train_collector=train_collector,
-            test_collector=test_collector,
-            max_epoch=args.epoch,
-            step_per_epoch=args.step_per_epoch,
-            step_per_collect=args.step_per_collect,
-            episode_per_test=args.test_num,
-            batch_size=args.batch_size,
-            train_fn=train_fn,
-            test_fn=test_fn,
-            update_per_step=args.update_per_step,
-            test_in_train=False,
-            save_best_fn=save_best_fn,
-            trial=opt_trial
-        )
+    result = OffpolicyTrainer(
+        policy=masp_policy,
+        train_collector=train_collector,
+        test_collector=test_collector,
+        max_epoch=args.epoch,
+        step_per_epoch=args.step_per_epoch,
+        step_per_collect=args.step_per_collect,
+        episode_per_test=args.test_num,
+        batch_size=args.batch_size,
+        train_fn=train_fn,
+        test_fn=test_fn,
+        update_per_step=args.update_per_step,
+        test_in_train=False,
+        save_best_fn=save_best_fn,
+        logger=logger
+    ).run()
 
     # Always save the final model
     last_path = os.path.join(weights_path, f"{args.model_name}_last.pth")
@@ -325,7 +306,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         discount_factor=args.gamma,
         estimation_step=args.n_step,
         target_update_freq=args.target_update_freq,
-        action_space=env.action_space
+        action_space=env.action_space[0]
     ).to(args.device)
 
     # Wrap in MultiAgentCollaborativeSharedPolicy

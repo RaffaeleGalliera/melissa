@@ -96,7 +96,8 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
     env = DummyVectorEnv([
         lambda: get_env(
             number_of_agents=args.n_agents,
-            is_scripted=args.mpr_policy,
+            heuristic=args.heuristic,
+            heuristic_params=args.heuristic_params,
             is_testing=True,
             dynamic_graph=args.dynamic_graph,
             render_mode="human",
@@ -126,7 +127,7 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
     )
 
     # Collect some episodes
-    result = collector.collect(n_episode=args.test_num * args.n_agents)
+    result = collector.collect(n_episode=args.test_num)
     pprint.pprint(result)
     time.sleep(5)
 
@@ -323,7 +324,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         discount_factor=args.gamma,
         estimation_step=args.n_step,
         target_update_freq=args.target_update_freq,
-        action_space=env.action_space
+        action_space=env.action_space[0]
     ).to(args.device)
 
     # Wrap in MultiAgentCollaborativeSharedPolicy

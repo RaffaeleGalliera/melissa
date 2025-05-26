@@ -1,77 +1,11 @@
 import copy
+import functools
 import glob
 import pickle
 import numpy as np
 import logging
 import networkx as nx
 from . import constants
-
-
-# OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html
-def mpr_heuristic(
-        one_hop_neighbours_ids,
-        two_hop_neighbours_ids,
-        agent_id,
-        local_view
-):
-    """
-    OLSRv1 MPR computation as before.
-    This is invoked for scripted agents in World.step().
-    """
-    two_hop_neighbours_ids = two_hop_neighbours_ids - one_hop_neighbours_ids
-    d_y = dict()
-    two_hop_coverage_summary = {
-        index: [] for index, value in enumerate(two_hop_neighbours_ids) if value == 1
-    }
-    covered = np.zeros(len(one_hop_neighbours_ids))
-    mpr = np.zeros(len(one_hop_neighbours_ids))
-
-    for neighbor in local_view.neighbors(agent_id):
-        clean_neighbor_neighbors = local_view.nodes[neighbor]['one_hop'].copy()
-        # Exclude from the list the 2-hop neighbours already reachable by self
-        clean_neighbor_neighbors[agent_id] = 0
-        for index in np.where(one_hop_neighbours_ids)[0]:
-            clean_neighbor_neighbors[index] = 0
-        # Calculate the coverage for two hop neighbors
-        for index in [i for i, x in enumerate(two_hop_neighbours_ids.astype(
-                int) & clean_neighbor_neighbors.astype(int)) if x == 1]:
-            two_hop_coverage_summary[index].append(
-                int(local_view.nodes[neighbor]['label']))
-        d_y[int(local_view.nodes[neighbor]['label'])] = sum(
-            clean_neighbor_neighbors)
-
-    # Add to covered if that neighbor is the unique provider
-    for key, candidates in two_hop_coverage_summary.items():
-        if len(candidates) == 1:
-            mpr[candidates[0]] = 1
-            covered[key] = 1
-
-    reachable_uncovered = np.array(
-        [1 if (value_2h and not value_c) else 0 for value_2h, value_c in
-         zip(two_hop_neighbours_ids, covered)])
-    while (reachable_uncovered != 0).any():
-        reachability = dict()
-        for neighbor in local_view.neighbors(agent_id):
-            reachability[int(local_view.nodes[neighbor]['label'])] = sum(
-                local_view.nodes[neighbor]['one_hop'].astype(int) & reachable_uncovered.astype(int))
-        max_reachability = [k for k, v in reachability.items() if v == max(reachability.values())]
-        if len(max_reachability) == 1:
-            key_to_add = max_reachability[0]
-            mpr[key_to_add] = 1
-            reachable_uncovered = np.array([
-                0 if (value_n and value_unc) else value_unc for
-                value_n, value_unc in
-                zip(local_view.nodes[key_to_add]['one_hop'], reachable_uncovered)])
-
-        elif len(max_reachability) > 1:
-            key_to_add = max({k: d_y[k] for k in max_reachability})
-            mpr[key_to_add] = 1
-            reachable_uncovered = np.array([
-                0 if (value_n and value_unc) else value_unc for
-                value_n, value_unc in
-                zip(local_view.nodes[key_to_add]['one_hop'], reachable_uncovered)])
-
-    return mpr
 
 
 class State:
@@ -81,8 +15,8 @@ class State:
         self.relays_for = None
         self.relayed_by = None
         self.message_origin = 0
-        self.has_taken_action = 0
-        self.has_message = 0
+        self.has_taken_action = False
+        self.has_message = False
 
     def reset(self, num_agents):
         self.received_from = np.zeros(num_agents)
@@ -90,8 +24,8 @@ class State:
         self.relays_for = np.zeros(num_agents)
         self.relayed_by = np.zeros(num_agents)
         self.message_origin = 0
-        self.has_taken_action = 0
-        self.has_message = 0
+        self.has_taken_action = False
+        self.has_message = False
 
 
 class Agent:
@@ -104,12 +38,13 @@ class Agent:
             state=None,
             pos=None,
             one_hop_neighbors_ids=None,
-            is_scripted=False,
-            is_interested=False
+            heuristic_fn=None,
+            is_interested=False,
     ):
         self.id = agent_id
         self.name = str(agent_id)
         self.state = State() if state is None else state
+
         # local_view is used by scripted heuristics
         self.local_view = local_view
 
@@ -123,13 +58,13 @@ class Agent:
         self.gained_two_hop_cover = 0
 
         self.action = None
-        self.is_scripted = is_scripted
-        self.action_callback = mpr_heuristic if self.is_scripted else None
+        self.heuristic_fn = heuristic_fn
+        self.action_callback = None
         self.suppl_mpr = None
-
         self.steps_taken = None
         self.truncated = None
         self.messages_transmitted = 0
+        self.number_interested_neighbors = 0
         self.actions_history = np.zeros((4,))
 
         self.is_interested = is_interested
@@ -141,7 +76,7 @@ class Agent:
             state=self.state,
             pos=pos,
             one_hop_neighbors_ids=one_hop_neighbors_ids,
-            is_scripted=self.is_scripted,
+            heuristic_fn=self.heuristic_fn,
             is_interested=self.is_interested
         )
 
@@ -159,11 +94,12 @@ class Agent:
         two_hop_neighbor_indices = np.where(self.two_hop_neighbours_ids)[0]
         new_two_hop_cover = sum(
             1 for idx in two_hop_neighbor_indices
-            if (agents[idx].state.has_message == 1 or agents[idx].state.message_origin == 1)
+            if (agents[idx].state.has_message or agents[idx].state.message_origin == 1)
         )
         self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
         self.two_hop_cover = new_two_hop_cover
 
+from .heuristics import HEURISTIC_REGISTRY, HeuristicResult
 
 class World:
     def __init__(
@@ -172,23 +108,24 @@ class World:
             radius,
             np_random,
             graph=None,
-            is_scripted=False,
             is_testing=False,
             random_graph=False,
             dynamic_graph=False,
             all_agents_source=False,
             num_test_episodes=10,
-            fixed_interest_density=None
+            fixed_interest_density=None,
+            heuristic: str = None,
+            heuristic_params: dict = None,
+            **kwargs
     ):
         self.selected_graph = None
-        self.messages_transmitted = 1
+        self.messages_transmitted = 0
         self.origin_agent = None
         self.num_agents = number_of_agents
         self.radius = radius
         self.graph = graph
         self.all_agents_source = all_agents_source
         self.is_graph_fixed = (graph is not None)
-        self.is_scripted = is_scripted
         self.random_graph = random_graph
         self.dynamic_graph = dynamic_graph
         self.agents = None
@@ -199,8 +136,22 @@ class World:
         self.movement_np_random = None
         self.movement_np_random_state = None
         self.max_node_degree = constants.MAX_NODE_DEGREE
-
         self.fixed_interest_density = fixed_interest_density
+
+        if heuristic:
+            if heuristic not in HEURISTIC_REGISTRY:
+                raise ValueError(f"Unknown heuristic policy: {heuristic}")
+            if not callable(HEURISTIC_REGISTRY[heuristic]):
+                raise ValueError(f"Policy {heuristic} is not callable.")
+            if heuristic_params is not None and not isinstance(heuristic_params, dict):
+                raise ValueError("Heuristic parameters must be a dictionary.")
+            else:
+                self.heuristic_fn = functools.partial(
+                    HEURISTIC_REGISTRY[heuristic],
+                    **(heuristic_params or {})
+                )
+        else:
+            self.heuristic_fn = None
 
         if self.is_testing:
             if self.max_node_degree:
@@ -238,33 +189,35 @@ class World:
         return [agent for agent in self.agents if agent.action_callback is not None]
 
     def step(self):
-        # Scripted agents pick actions
         for agent in self.scripted_agents:
-            agent.suppl_mpr = agent.action_callback(
-                agent.one_hop_neighbours_ids,
-                agent.two_hop_neighbours_ids,
-                agent.id,
-                agent.local_view
-            )
-            relay_indices = np.where(agent.suppl_mpr)[0]
-            for idx in relay_indices:
-                self.agents[idx].state.relays_for[agent.id] = 1
+            result: HeuristicResult = agent.action_callback(agent=agent)
+
+            if result.relay_mask is not None:
+                for nbr in np.where(result.relay_mask)[0]:
+                    self.agents[nbr].state.relays_for[agent.id] = 1
+
+            if result.action is not None:
+                agent.action = result.action
 
         for agent in self.scripted_agents:
-            agent.action = 0
-            if (not agent.state.has_taken_action) and (
-                agent.state.has_message == 1 or agent.state.message_origin
-            ):
-                if agent.has_received_from_relayed_node() or agent.state.message_origin:
-                    agent.action = 1
-                agent.state.has_taken_action = 1
+            if np.where(agent.state.relays_for)[0].size > 0:
+                agent.action = 0
+                if (not agent.state.has_taken_action) and (
+                        agent.state.has_message or agent.state.message_origin
+                ):
+                    if agent.has_received_from_relayed_node() or agent.state.message_origin:
+                        agent.action = 1
+
+        # Overwrite action for source agent at first round: it will always broadcast
+        self.agents[self.origin_agent].action = 1 if self.agents[self.origin_agent].messages_transmitted == 0 else self.agents[self.origin_agent].action
 
         # Update environment logic
         for agent in self.agents:
             logging.debug(
                 f"Agent {agent.name} Action: {agent.action} with Neigh: {agent.one_hop_neighbours_ids}"
             )
-            self.update_agent_state(agent)
+            if agent.action and agent.state.has_message:
+                self.relay_message(agent)
 
         if self.dynamic_graph:
             self.move_graph()
@@ -273,22 +226,23 @@ class World:
         for agent in self.agents:
             self.update_local_graph(agent)
 
-        # Clear MPR for next step
+        # Clear MPR for next step and action
         for agent in self.scripted_agents:
             agent.state.relays_for = np.zeros(self.num_agents)
+            agent.action = 0
 
-    def update_agent_state(self, agent):
-        if agent.action:
-            agent.state.transmitted_to += agent.one_hop_neighbours_ids
-            self.messages_transmitted += 1
-            agent.messages_transmitted += 1
-            if agent.steps_taken is not None and agent.steps_taken > 0:
-                agent.actions_history[agent.steps_taken - 1] = agent.action
+    def relay_message(self, agent):
+        agent.state.transmitted_to += agent.one_hop_neighbours_ids
+        self.messages_transmitted += 1
+        agent.messages_transmitted += 1
+        agent.state.has_taken_action = True
+        if agent.steps_taken is not None and agent.steps_taken > 0:
+            agent.actions_history[agent.steps_taken - 1] = agent.action
 
-            neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
-            for idx in neighbor_indices:
-                self.agents[idx].state.received_from[agent.id] += 1
-                self.agents[idx].state.has_message = 1
+        neighbor_indices = np.where(agent.one_hop_neighbours_ids)[0]
+        for idx in neighbor_indices:
+            self.agents[idx].state.received_from[agent.id] += 1
+            self.agents[idx].state.has_message = True
 
     def move_graph(self):
         self.pre_move_graph = self.graph.copy()
@@ -296,9 +250,9 @@ class World:
         self.update_position(step=constants.NODES_MOVEMENT_STEP)
 
         for agent in self.agents:
-            self.update_one_hop_neighbors(agent)
+            self.update_one_hop_neighbors_info(agent)
         for agent in self.agents:
-            self.update_two_hop_neighbors(agent)
+            self.update_two_hop_neighbors_info(agent)
 
     def update_local_graph(self, agent):
         local_graph = nx.ego_graph(self.graph, agent.id, undirected=True)
@@ -330,15 +284,20 @@ class World:
         oy = [step * self.movement_np_random.uniform(-1, 1) for _ in range(self.num_agents)]
         return ox, oy
 
-    def update_one_hop_neighbors(self, agent):
+    def update_one_hop_neighbors_info(self, agent):
         one_hop_neighbours_ids = np.zeros(self.num_agents)
+        agent.number_interested_neighbors = 0
+
         for agent_index in self.graph.neighbors(agent.id):
             one_hop_neighbours_ids[agent_index] = 1
+            if self.agents[agent_index].is_interested:
+                agent.number_interested_neighbors += 1
+
         self.graph.nodes[agent.id]['one_hop'] = one_hop_neighbours_ids
         self.graph.nodes[agent.id]['one_hop_list'] = list(self.graph.neighbors(agent.id))
         agent.one_hop_neighbours_ids = one_hop_neighbours_ids
 
-    def update_two_hop_neighbors(self, agent):
+    def update_two_hop_neighbors_info(self, agent):
         agent.two_hop_neighbours_ids = agent.one_hop_neighbours_ids.copy()
         for agent_index in self.graph.neighbors(agent.id):
             neighbor_1hop = self.agents[agent_index].one_hop_neighbours_ids
@@ -371,6 +330,10 @@ class World:
             chosen_source_id = ep_rng.randint(0, self.num_agents)
             fixed_interest_densities = [i / 10.0 for i in range(1, 11)]
             interest_density = fixed_interest_densities[self.test_episode_index % len(fixed_interest_densities)]
+            print(
+                f"Testing episode {self.test_episode_index}, seed {episode_seed}, "
+                f"graph {selected_graph_path}, interest density {interest_density}"
+            )
         else:
             episode_seed = self.np_random.integers(0, 1e9)
             ep_rng = np.random.RandomState(episode_seed)
@@ -403,7 +366,7 @@ class World:
             new_agent = Agent(
                 i,
                 local_graph,
-                is_scripted=self.is_scripted,
+                heuristic_fn=self.heuristic_fn,
                 is_interested=is_int
             )
             self.agents.append(new_agent)
@@ -411,7 +374,7 @@ class World:
         # Initialize each agent's arrays and neighbors
         for agent in self.agents:
             agent.state.reset(self.num_agents)
-            self.update_one_hop_neighbors(agent)
+            self.update_one_hop_neighbors_info(agent)
             self.graph.nodes[agent.id]['label'] = agent.id
 
         for agent in self.agents:
@@ -420,15 +383,19 @@ class World:
                 pos=self.graph.nodes[agent.id]['pos'],
                 one_hop_neighbors_ids=agent.one_hop_neighbours_ids
             )
-            self.update_two_hop_neighbors(agent)
+            self.update_two_hop_neighbors_info(agent)
             agent.steps_taken = 0
             agent.truncated = False
 
+        # Set the selected heuristic function for scripted agents
+        if self.heuristic_fn:
+            for agent in self.agents:
+                agent.action_callback = self.heuristic_fn
+
         # Mark the source agent: it originates the message
         source_agent = self.agents[self.origin_agent]
-        source_agent.state.message_origin = 1
-        source_agent.state.has_message = 1
-        source_agent.action = 1
+        source_agent.state.message_origin = True
+        source_agent.state.has_message = True
         source_agent.steps_taken = 1
 
         self.step()
