@@ -28,7 +28,6 @@ from graph_env.env.utils.policies.multi_agent_managers.collaborative_shared_poli
 from graph_env.env.utils.policies.dgn import DGNPolicy
 
 from graph_env.env.utils.collectors.collective_experience_collector import CollectiveExperienceCollector
-from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
 
 from common import get_args, get_env, select_aggregator
 
@@ -134,13 +133,9 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
 def train_agent(
     args: argparse.Namespace,
     masp_policy: BasePolicy = None,
-    optim: torch.optim.Optimizer = None,
-    opt_trial: optuna.Trial = None
+    optim: torch.optim.Optimizer = None
 ) -> Tuple[dict, BasePolicy]:
-    """
-    Main training loop, with optional hyperparameter optimization
-    (when args.optimize is True).
-    """
+    
 
     train_envs = SubprocVectorEnv([
         lambda: get_env(
@@ -208,12 +203,11 @@ def train_agent(
     weights_path = os.path.join(log_path, "weights")
     Path(weights_path).mkdir(parents=True, exist_ok=True)
 
-    if not args.optimize:
-        logger = WandbLogger(project="group_interest_dissemination", name=args.model_name)
-        writer = SummaryWriter(log_path)
-        writer.add_text("args", str(args))
-        if logger is not None:
-            logger.load(writer)
+    logger = WandbLogger(project="group_interest_dissemination", name=args.model_name)
+    writer = SummaryWriter(log_path)
+    writer.add_text("args", str(args))
+    if logger is not None:
+        logger.load(writer)
 
     def save_best_fn(pol: BasePolicy):
         """
@@ -245,42 +239,22 @@ def train_agent(
         """
         masp_policy.policy.set_eps(args.eps_test)
 
-    # Decide trainer vs. optimizer
-    if not args.optimize:
-        result = OffpolicyTrainer(
-            policy=masp_policy,
-            train_collector=train_collector,
-            test_collector=test_collector,
-            max_epoch=args.epoch,
-            step_per_epoch=args.step_per_epoch,
-            step_per_collect=args.step_per_collect,
-            episode_per_test=args.test_num,
-            batch_size=args.batch_size,
-            train_fn=train_fn,
-            test_fn=test_fn,
-            update_per_step=args.update_per_step,
-            test_in_train=False,
-            save_best_fn=save_best_fn,
-            logger=logger
-        ).run()
-    else:
-        # hyperparameter optimization
-        result = offpolicy_optimizer(
-            policy=masp_policy,
-            train_collector=train_collector,
-            test_collector=test_collector,
-            max_epoch=args.epoch,
-            step_per_epoch=args.step_per_epoch,
-            step_per_collect=args.step_per_collect,
-            episode_per_test=args.test_num,
-            batch_size=args.batch_size,
-            train_fn=train_fn,
-            test_fn=test_fn,
-            update_per_step=args.update_per_step,
-            test_in_train=False,
-            save_best_fn=save_best_fn,
-            trial=opt_trial
-        )
+    result = OffpolicyTrainer(
+        policy=masp_policy,
+        train_collector=train_collector,
+        test_collector=test_collector,
+        max_epoch=args.epoch,
+        step_per_epoch=args.step_per_epoch,
+        step_per_collect=args.step_per_collect,
+        episode_per_test=args.test_num,
+        batch_size=args.batch_size,
+        train_fn=train_fn,
+        test_fn=test_fn,
+        update_per_step=args.update_per_step,
+        test_in_train=False,
+        save_best_fn=save_best_fn,
+        logger=logger
+    ).run()
 
     # Always save the final model
     last_path = os.path.join(weights_path, f"{args.model_name}_last.pth")
@@ -341,10 +315,6 @@ if __name__ == '__main__':
     args.algorithm = "dgn_r"
     if args.watch:
         watch(args)
-
-    elif args.optimize:
-        pass
-
     else:
         result, masp_policy = train_agent(args)
         pprint.pprint(result)

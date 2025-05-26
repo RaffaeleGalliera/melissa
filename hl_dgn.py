@@ -130,14 +130,9 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
 def train_agent(
     args: argparse.Namespace,
     masp_policy: BasePolicy = None,
-    optim: torch.optim.Optimizer = None,
-    opt_trial: optuna.Trial = None
+    optim: torch.optim.Optimizer = None
 ) -> Tuple[dict, BasePolicy]:
-    """
-    Main training loop, with optional hyperparameter optimization
-    (when args.optimize is True).
-    """
-    # Build training and test envs
+
     train_envs = SubprocVectorEnv([
         lambda: get_env(
             number_of_agents=args.n_agents,
@@ -204,12 +199,11 @@ def train_agent(
     weights_path = os.path.join(log_path, "weights")
     Path(weights_path).mkdir(parents=True, exist_ok=True)
 
-    if not args.optimize:
-        logger = WandbLogger(project="group_interest_dissemination", name=args.model_name)
-        writer = SummaryWriter(log_path)
-        writer.add_text("args", str(args))
-        if logger is not None:
-            logger.load(writer)
+    logger = WandbLogger(project="group_interest_dissemination", name=args.model_name)
+    writer = SummaryWriter(log_path)
+    writer.add_text("args", str(args))
+    if logger is not None:
+        logger.load(writer)
 
     def save_best_fn(pol: BasePolicy):
         """
@@ -317,10 +311,6 @@ if __name__ == '__main__':
     args.algorithm = "hl_dgn"
     if args.watch:
         watch(args)
-
-    elif args.optimize:
-        pass
-
     else:
         result, masp_policy = train_agent(args)
         pprint.pprint(result)

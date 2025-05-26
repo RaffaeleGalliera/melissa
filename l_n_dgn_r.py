@@ -28,7 +28,6 @@ from graph_env.env.utils.policies.n_dgn import DGNPolicy
 from graph_env.env.utils.networks.l_dgn import LDGNNetwork
 from graph_env.env.utils.policies.multi_agent_managers.collaborative_shared_policy import MultiAgentCollaborativeSharedPolicy
 from graph_env.env.utils.collectors.collective_experience_collector import CollectiveExperienceCollector
-from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
 
 from common import get_args, get_env, select_aggregator
 
@@ -135,14 +134,9 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
 def train_agent(
     args: argparse.Namespace,
     masp_policy: BasePolicy = None,
-    optim: torch.optim.Optimizer = None,
-    opt_trial: optuna.Trial = None
+    optim: torch.optim.Optimizer = None
 ) -> Tuple[dict, BasePolicy]:
-    """
-    Main training loop, with optional hyperparameter optimization
-    (when args.optimize is True).
-    """
-    # Build training and test envs
+
     train_envs = SubprocVectorEnv([
         lambda: get_env(
             number_of_agents=args.n_agents,
@@ -209,12 +203,11 @@ def train_agent(
     weights_path = os.path.join(log_path, "weights")
     Path(weights_path).mkdir(parents=True, exist_ok=True)
 
-    if not args.optimize:
-        logger = WandbLogger(project="group_interest_dissemination", name=args.model_name)
-        writer = SummaryWriter(log_path)
-        writer.add_text("args", str(args))
-        if logger is not None:
-            logger.load(writer)
+    logger = WandbLogger(project="group_interest_dissemination", name=args.model_name)
+    writer = SummaryWriter(log_path)
+    writer.add_text("args", str(args))
+    if logger is not None:
+        logger.load(writer)
 
     def save_best_fn(pol: BasePolicy):
         """
@@ -314,7 +307,6 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
 
     # Load weights
     masp_policy.policy.load_state_dict(torch.load(path))
-    print("Successfully restored policy and optimizer.")
     return masp_policy
 
 
@@ -323,10 +315,6 @@ if __name__ == '__main__':
     args.algorithm = "l_n_dgn_r"
     if args.watch:
         watch(args)
-
-    elif args.optimize:
-        pass
-
     else:
         result, masp_policy = train_agent(args)
         pprint.pprint(result)
