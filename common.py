@@ -41,31 +41,18 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument('--dueling-q-hidden-sizes', type=int, nargs='*', default=[128, 128])
     parser.add_argument('--dueling-v-hidden-sizes', type=int, nargs='*', default=[128, 128])
     parser.add_argument("--aggregator-function", type=str, default="global_max_pool")
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda" if torch.cuda.is_available() else "cpu"
-    )
+    parser.add_argument("--edge-attributes", action="store_true", default=False)
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume-path", type=str, default=None)
     parser.add_argument("--resume-id", type=str, default=None)
     parser.add_argument("--mpr-policy", action="store_true", default=False, help="Use MPR policy")
     parser.add_argument("--n-agents", type=int, choices=[20, 50, 100], default=20)
     parser.add_argument("--watch", action="store_true", default=False, help="Watch the pre-trained policy only")
-    parser.add_argument("--dynamic-graph", action="store_true", default=False, help="Enable dynamic graphs")
+    parser.add_argument("--dynamic-graph", action="store_true", default=True, help="Enable dynamic graphs")
     parser.add_argument("--prio-buffer", action="store_true", default=False, help="Use prioritized replay buffer")
     parser.add_argument("--save-buffer-name", type=str, default=None)
-    parser.add_argument(
-        "--model-name",
-        type=str,
-        default=datetime.datetime.now().strftime("%y%m%d-%H%M%S")
-    )
-    parser.add_argument(
-        "--optimize",
-        "--optimize-hyperparameters",
-        action="store_true",
-        default=False,
-        help="Run hyperparameters search"
-    )
+    parser.add_argument("--model-name", type=str, default=datetime.datetime.now().strftime("%y%m%d-%H%M%S"))
+    parser.add_argument("--optimize", "--optimize-hyperparameters", action="store_true", default=False, help="Run hyperparameters search")
     parser.add_argument("--study-name", type=str, default=None)
     parser.add_argument("--sampler-method", type=str, default="tpe")
     parser.add_argument("--pruner-method", type=str, default="median")
@@ -77,7 +64,9 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--alpha", type=float, default=0.6)
     parser.add_argument("--beta", type=float, default=0.4)
     parser.add_argument("--save-study", action="store_true", default=False, help="Save study")
-
+    parser.add_argument("--heuristic", type=str, default=None, help="Heuristic function to use")
+    parser.add_argument("--heuristic-params", nargs = "*", default = [], help = "List of key=value pairs for heuristic, e.g. prob=0.3 alpha=2")
+    parser.add_argument("--scripted-agents-ratio", type=float, default=0.0, help="Ratio of scripted agents in the environment")
     return parser
 
 
@@ -86,7 +75,26 @@ def get_args() -> argparse.Namespace:
     Parse the known arguments and set the learning algorithm name.
     """
     args = get_parser().parse_known_args()[0]
-    args.learning_algorithm = "hl_dgn"
+
+
+    params = {}
+    for kv in args.heuristic_params:
+        if "=" not in kv:
+            raise ValueError(f"Bad heuristic-param '{kv}', use key=value")
+        k, v = kv.split("=", 1)
+
+        if v.isdigit():
+            v2 = int(v)
+        else:
+            try:
+                v2 = float(v)
+            except ValueError:
+                if v.lower() in ("true", "false"):
+                    v2 = v.lower() == "true"
+                else:
+                    v2 = v
+        params[k] = v2
+    args.heuristic_params = params
     return args
 
 
@@ -109,10 +117,13 @@ def get_env(
     radius: float = RADIUS_OF_INFLUENCE,
     graph=None,
     render_mode=None,
-    is_scripted=False,
+    heuristic=None,
+    heuristic_params=None,
     is_testing=False,
     dynamic_graph=False,
-    all_agents_source=False
+    all_agents_source=False,
+    num_test_episodes=None,
+    scripted_agents_ratio=None
 ) -> PettingZooEnv:
     """
     Create and wrap the GraphEnv in a PettingZooEnv interface.
@@ -122,9 +133,12 @@ def get_env(
         render_mode=render_mode,
         number_of_agents=number_of_agents,
         radius=radius,
-        is_scripted=is_scripted,
+        heuristic=heuristic,
+        heuristic_params=heuristic_params,
         is_testing=is_testing,
         dynamic_graph=dynamic_graph,
-        all_agents_source=all_agents_source
+        all_agents_source=all_agents_source,
+        num_test_episodes=num_test_episodes,
+        scripted_agents_ratio=scripted_agents_ratio
     )
     return PettingZooEnv(env)

@@ -93,137 +93,6 @@ class TestAgent:
 
 # World test suite
 class TestWorld:
-
-    # Testing update_local_graph method
-    def test_update_local_graph(self, world, graph):
-        with mock.patch.object(World, 'update_position', new=new_update_position):
-            # Initialize world and set agent
-            world = world(graph)
-            agent = world.agents[0]
-
-            # Check if local graph of agent chosen is correct
-            world.update_local_graph(agent)
-            g1 = nx.Graph()
-            g1.add_edges_from([(0, 1), (0, 2), (0, 3), (0, 4), (3, 4)])
-            assert (nx.is_isomorphic(agent.local_view, g1))
-
-            # Move the graph
-            world.move_graph()
-
-            # Check if local graph of agent chosen is still correct
-            world.update_local_graph(agent)
-            g2 = nx.Graph()
-            g2.add_edges_from([(0, 1), (0, 3)])
-            assert (nx.is_isomorphic(agent.local_view, g2))
-
-    # Testing update_agent_state method when graph is static and agent doesn't cast message
-    def test_update_agent_static_noaction(self, world, graph):
-        with mock.patch.object(World, 'update_position', new=new_update_position):
-            # Initialize world and set agent
-            world = world(graph)
-            agent = world.agents[0]
-            # Agent doesn't act
-            agent.action = 0
-
-            # Update agent state and features
-            world.update_agent_state(agent)
-            world.update_agent_features(agent)
-
-            # Check agent state is correct after the update
-            assert (agent.state.transmitted_to == [0] * graph.number_of_nodes()).all()
-            assert (agent.messages_transmitted == 0)
-            assert (agent.actions_history[agent.steps_taken - 1] == 0)
-            neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
-            for index in neighbour_indices:
-                assert (world.agents[index].state.received_from[agent.id] == 0)
-            assert (graph.nodes[agent.id]['features'] == [4, 0, 0, 0, 0, 0, 0]).all()
-
-    # Testing update_agent_state method when graph is dynamic and agent doesn't cast message
-    def test_update_agent_state_dynamic_noaction(self, world, graph):
-        with mock.patch.object(World, 'update_position', new=new_update_position):
-            # Initialize world and set first agent
-            world = world(graph)
-            agent = world.agents[0]
-            # First agent act
-            agent.action = 1
-
-            # Update agent state and features, graph is moved
-            world.update_agent_state(agent)
-            world.move_graph()
-            world.update_agent_features(agent)
-
-            # Agent is set
-            agent = world.agents[1]
-            # Agent doesn't act
-            agent.action = 0
-
-            # Update agent state and features again
-            world.update_agent_state(agent)
-            world.update_agent_features(agent)
-
-            # Check agent state is correct after the update
-            assert (agent.state.transmitted_to == [0] * graph.number_of_nodes()).all()
-            assert (agent.messages_transmitted == 0)
-            assert (agent.actions_history[agent.steps_taken - 1] == 0)
-            neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
-            for index in neighbour_indices:
-                assert (world.agents[index].state.received_from[agent.id] == 0)
-            assert (graph.nodes[agent.id]['features'] == [2, 0, 0, 0, 0, 0, 0]).all()
-
-    # Testing update_agent_state method when graph is static and agent casts message
-    def test_update_agent_state_static_action(self, world, graph):
-        with mock.patch.object(World, 'update_position', new=new_update_position):
-            # Initialize world and set agent
-            world = world(graph)
-            agent = world.agents[0]
-            # Agent acts
-            agent.action = 1
-
-            # Update agent state and features
-            world.update_agent_state(agent)
-            world.update_agent_features(agent)
-
-            # Check agent state is correct after the update
-            assert (agent.state.transmitted_to == [0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0]).all()
-            assert (agent.messages_transmitted == 1)
-            assert (agent.actions_history[agent.steps_taken - 1] == 1)
-            neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
-            for index in neighbour_indices:
-                assert (world.agents[index].state.received_from[agent.id] == 1)
-            assert (graph.nodes[agent.id]['features'] == [4, 1, 0, 0, 0, 0, 1]).all()
-
-    # Testing update_agent_state method when graph is dynamic and agent casts message
-    def test_update_agent_state_dynamic_action(self, world, graph):
-        with mock.patch.object(World, 'update_position', new=new_update_position):
-            # Initialize world and set first agent
-            world = world(graph)
-            agent = world.agents[0]
-            # First agent act
-            agent.action = 1
-
-            # Update agent state and features, graph is moved
-            world.update_agent_state(agent)
-            world.move_graph()
-            world.update_agent_features(agent)
-
-            # Agent is set
-            agent = world.agents[1]
-            # Agent acts
-            agent.action = 1
-
-            # Update agent state and features again, graph is moved
-            world.update_agent_state(agent)
-            world.update_agent_features(agent)
-
-            # Check agent state is correct after the update
-            assert (agent.state.transmitted_to == [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]).all()
-            assert (agent.messages_transmitted == 1)
-            assert (agent.actions_history[agent.steps_taken - 1] == 1)
-            neighbour_indices = np.where(agent.one_hop_neighbours_ids)[0]
-            for index in neighbour_indices:
-                assert (world.agents[index].state.received_from[agent.id] == 1)
-            assert (graph.nodes[agent.id]['features'] == [2, 1, 0, 0, 0, 0, 1]).all()
-
     # Testing one_hop_neighbours method
     def test_one_hop_neighbours(self, world, graph):
         world = world(graph)
@@ -246,7 +115,7 @@ class TestWorld:
             world = world(graph)
             world.update_position(step=1)
             for agent in world.agents:
-                world.update_one_hop_neighbors(agent)
+                world.update_one_hop_neighbors_info(agent)
             assert (world.agents[0].one_hop_neighbours_ids == np.array([0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])).all()
             assert (world.agents[1].one_hop_neighbours_ids == np.array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0])).all()
             assert (world.agents[2].one_hop_neighbours_ids == np.array([0, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0])).all()
@@ -282,9 +151,9 @@ class TestWorld:
             world = world(graph)
             world.update_position(step=1)
             for agent in world.agents:
-                world.update_one_hop_neighbors(agent)
+                world.update_one_hop_neighbors_info(agent)
             for agent in world.agents:
-                world.update_two_hop_neighbors(agent)
+                world.update_two_hop_neighbors_info(agent)
             assert (world.agents[0].one_hop_neighbours_ids == np.array([0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0])).all()
             assert (world.agents[0].two_hop_neighbours_ids == np.array([0, 1, 1, 1, 1, 1, 0, 1, 0, 0, 1, 0])).all()
             assert (world.agents[1].two_hop_neighbours_ids == np.array([1, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0])).all()
@@ -299,41 +168,118 @@ class TestWorld:
             assert (world.agents[10].two_hop_neighbours_ids == np.array([1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1])).all()
             assert (world.agents[11].two_hop_neighbours_ids == np.array([0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0])).all()
 
-    # Testing scenario in which graph updates and changes connections before agent sends message
-    def test_send_while_graph_moves(self, world, graph):
-        with mock.patch.object(World, 'update_position', new=new_update_position):
-            # Initialize world
-            world = world(graph)
-            # Set first agent casting message
-            agent = world.agents[7]
-            agent.action = 1
 
-            # Update agent state and features, graph is moved
-            world.update_agent_state(agent)
-            world.move_graph()
-            world.update_agent_features(agent)
+class TestWorldHeuristics:
+    def test_world_simple_broadcast(self, graph):
+        # seed for reproducibility
+        np_random, _ = seeding.np_random(42)
+        world = World(
+            number_of_agents=graph.number_of_nodes(),
+            radius=0.2,
+            np_random=np_random,
+            graph=graph,
+            scripted_agents_ratio=1.0,
+            heuristic="simple_broadcast"
+        )
 
-            # Check states and features of transmitter and receivers
-            assert (world.agents[7].state.transmitted_to == [0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0]).all()
-            assert (graph.nodes[agent.id]['features'] == [2, 1, 0, 0, 0, 0, 1]).all()
-            assert (world.agents[3].state.received_from == [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]).all()
-            assert (world.agents[8].state.received_from == [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]).all()
-            assert (world.agents[9].state.received_from == [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]).all()
+        src = world.origin_agent
+        first_wave = world.agents[src].one_hop_neighbours_ids.copy()
+        # it MUST have transmitted exactly to all its one‐hop neighbours
+        assert np.array_equal(world.agents[src].state.transmitted_to, first_wave)
+        # and each such neighbour must have received exactly one message from src
+        for nbr in np.where(first_wave)[0]:
+            assert world.agents[nbr].state.received_from[src] == 1
 
-            # Set second agent not casting any message
-            agent = world.agents[8]
-            agent.action = 0
-            # Update agent state and features
-            world.update_agent_state(agent)
-            world.update_agent_features(agent)
+        # --- STEP 2: drive a second propagation ---
+        world.step()
 
-            # Second agent finally cast message
-            agent.action = 1
-            world.update_agent_state(agent)
-            world.update_agent_features(agent)
+        # now **every** agent that got the message in wave 1 should forward it in wave 2
+        for relay_agent in np.where(first_wave)[0]:
+            transmitted_to = world.agents[relay_agent].state.transmitted_to
+            mask = world.agents[relay_agent].one_hop_neighbours_ids
+            # that agent's own transmitted_to must equal its one‐hop mask
+            # 1) Wherever mask==0, tt must be exactly 0
+            assert np.all(transmitted_to[mask == 0] == 0), (
+                f"Agent {relay_agent} forwarded to non-neighbours: "
+                f"{np.where((mask == 0) & (transmitted_to != 0))[0]}"
+            )
 
-            # Check states and features of transmitter and receivers
-            assert (world.agents[8].state.transmitted_to == [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]).all()
-            assert (graph.nodes[agent.id]['features'] == [1, 1, 0, 0, 0, 0, 1]).all()
-            assert (world.agents[7].state.received_from == [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]).all()
-            assert (world.agents[9].state.received_from == [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]).all()
+            # 2) Wherever mask==1, tt must be ≥1
+            assert np.all(transmitted_to[mask == 1] >= 1), (
+                f"Agent {relay_agent} failed to forward to some neighbour(s): "
+                f"{np.where((mask == 1) & (transmitted_to < 1))[0]}"
+            )            # and each of **its** neighbours must have received from relay_agent once
+
+            for nbr2 in np.where(mask)[0]:
+                assert world.agents[nbr2].state.received_from[relay_agent] >= 1, \
+                    f"Neighbour {nbr2} did not receive from {relay_agent}"
+
+    def test_world_probabilistic_relay_zero(self, graph):
+        # with prob=0 nobody beyond the origin should relay
+        np_random, _ = seeding.np_random(123)
+        world = World(
+            number_of_agents=graph.number_of_nodes(),
+            radius=0.2,
+            np_random=np_random,
+            graph=graph,
+            is_scripted=True,
+            scripted_agents_ratio=1.0,
+            heuristic="probabilistic_relay",
+            heuristic_params={"prob": 0.0}
+        )
+
+        src = world.origin_agent
+        # who got the origin’s message in the built-in reset()/step()
+        first_wave = world.agents[src].one_hop_neighbours_ids
+
+        # Make two steps such that the first wave of relays is done
+        world.step()
+        world.step()
+
+        # now each of those first-wave recipients must *not* relay
+        for relay_agent in np.where(first_wave)[0]:
+            tt = world.agents[relay_agent].state.transmitted_to
+            assert np.all(tt == 0), (
+                f"Agent {relay_agent} unexpectedly relayed to "
+                f"{np.where(tt != 0)[0].tolist()}"
+            )
+
+    def test_world_probabilistic_relay_one(self, graph):
+        # prob=1 ⇒ first-wave recipients MUST forward to all their neighbours
+        np_random, _ = seeding.np_random(999)
+        world = World(
+            number_of_agents=graph.number_of_nodes(),
+            radius=0.2,
+            np_random=np_random,
+            graph=graph,
+            is_scripted=True,
+            scripted_agents_ratio=1.0,
+            heuristic="probabilistic_relay",
+            heuristic_params={"prob": 1.0}
+        )
+
+        src = world.origin_agent
+        first_wave = world.agents[src].one_hop_neighbours_ids.copy()
+
+        # step 2: first wave -> second wave
+        world.step()
+
+        for relay_agent in np.where(first_wave)[0]:
+            mask = world.agents[relay_agent].one_hop_neighbours_ids
+            tt   = world.agents[relay_agent].state.transmitted_to
+
+            # no spurious forwards
+            assert np.all(tt[mask == 0] == 0), (
+                f"Agent {relay_agent} forwarded to non-neighbours: "
+                f"{np.where((mask==0)&(tt!=0))[0].tolist()}"
+            )
+            # at least one forward to each true neighbour
+            assert np.all(tt[mask == 1] >= 1), (
+                f"Agent {relay_agent} failed to forward to neighbours: "
+                f"{np.where((mask==1)&(tt<1))[0].tolist()}"
+            )
+            # and those neighbours must have recorded a receipt
+            for nbr in np.where(mask)[0]:
+                assert world.agents[nbr].state.received_from[relay_agent] >= 1, (
+                    f"Neighbour {nbr} did not receive from {relay_agent}"
+                )

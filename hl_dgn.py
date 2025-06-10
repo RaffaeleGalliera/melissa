@@ -2,7 +2,6 @@ import argparse
 import os
 import pprint
 import time
-import warnings
 from math import e, log, pow
 from pathlib import Path
 from typing import List, Tuple
@@ -26,7 +25,6 @@ from graph_env.env.utils.constants import NUMBER_OF_FEATURES
 from graph_env.env.utils.networks.hl_dgn import HLDGNNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
 from graph_env.env.utils.collectors.multi_agent_collector import MultiAgentCollector
-from graph_env.env.utils.hyp_optimizer.offpolicy_opt import offpolicy_optimizer
 
 from common import get_args, get_env, select_aggregator
 
@@ -38,7 +36,7 @@ def get_agents(
     """
     Build or return the MultiAgentSharedPolicy, the optimizer, and list of agents.
     """
-    env = get_env(number_of_agents=args.n_agents)
+    env = get_env(number_of_agents=args.n_agents, scripted_agents_ratio=args.scripted_agents_ratio)
     observation_space = env.observation_space['observation'] if isinstance(
         env.observation_space, (gymnasium.spaces.Dict, gymnasium.spaces.Dict)
     ) else env.observation_space
@@ -60,8 +58,10 @@ def get_agents(
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
+            agents_num=args.n_agents,
             device=args.device,
             dueling_param=(q_param, v_param),
+            edge_attributes=args.edge_attributes,
             aggregator_function=aggregator
         )
 
@@ -75,7 +75,7 @@ def get_agents(
             discount_factor=args.gamma,
             estimation_step=args.n_step,
             target_update_freq=args.target_update_freq,
-            action_space=env.action_space  # If discrete, Tianshou automatically handles that
+            action_space=env.action_space
         ).to(args.device)
 
     masp_policy = MultiAgentSharedPolicy(policy, env)
@@ -94,11 +94,14 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
     env = DummyVectorEnv([
         lambda: get_env(
             number_of_agents=args.n_agents,
-            is_scripted=args.mpr_policy,
             is_testing=True,
             dynamic_graph=args.dynamic_graph,
-            render_mode="human",
-            all_agents_source=True
+            # render_mode="human",
+            all_agents_source=True,
+            num_test_episodes=args.test_num,
+            heuristic=args.heuristic,
+            heuristic_params=args.heuristic_params,
+            scripted_agents_ratio=args.scripted_agents_ratio
         )
     ])
 
@@ -123,25 +126,23 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
     )
 
     # Collect some episodes
-    result = collector.collect(n_episode=args.test_num * args.n_agents)
+    result = collector.collect(n_episode=args.test_num)
     pprint.pprint(result)
     time.sleep(5)
 
 def train_agent(
     args: argparse.Namespace,
     masp_policy: BasePolicy = None,
-    optim: torch.optim.Optimizer = None,
-    opt_trial: optuna.Trial = None
+    optim: torch.optim.Optimizer = None
 ) -> Tuple[dict, BasePolicy]:
-    """
-    Main training loop, with optional hyperparameter optimization
-    (when args.optimize is True).
-    """
-    # Build training and test envs
+
     train_envs = SubprocVectorEnv([
         lambda: get_env(
             number_of_agents=args.n_agents,
-            dynamic_graph=args.dynamic_graph
+            dynamic_graph=args.dynamic_graph,
+            heuristic=args.heuristic,
+            heuristic_params=args.heuristic_params,
+            scripted_agents_ratio=args.scripted_agents_ratio
         )
         for _ in range(args.training_num)
     ])
@@ -149,7 +150,11 @@ def train_agent(
         lambda: get_env(
             number_of_agents=args.n_agents,
             dynamic_graph=args.dynamic_graph,
-            is_testing=True
+            is_testing=True,
+            num_test_episodes=args.test_num,
+            heuristic=args.heuristic,
+            heuristic_params=args.heuristic_params,
+            scripted_agents_ratio=args.scripted_agents_ratio
         )
     ])
 
@@ -203,12 +208,11 @@ def train_agent(
     weights_path = os.path.join(log_path, "weights")
     Path(weights_path).mkdir(parents=True, exist_ok=True)
 
-    if not args.optimize:
-        logger = WandbLogger(project="dancing_bees", name=args.model_name)
-        writer = SummaryWriter(log_path)
-        writer.add_text("args", str(args))
-        if logger is not None:
-            logger.load(writer)
+    logger = WandbLogger(project="group_interest_dissemination", name=args.model_name)
+    writer = SummaryWriter(log_path)
+    writer.add_text("args", str(args))
+    if logger is not None:
+        logger.load(writer)
 
     def save_best_fn(pol: BasePolicy):
         """
@@ -217,6 +221,7 @@ def train_agent(
         best_path = os.path.join(weights_path, f"{args.model_name}_best.pth")
         print(f"Saving best model to {best_path}")
         torch.save(pol.policy.state_dict(), best_path)
+        logger.wandb_run.save(best_path)
 
     def train_fn(epoch: int, env_step: int):
         """
@@ -239,47 +244,28 @@ def train_agent(
         """
         masp_policy.policy.set_eps(args.eps_test)
 
-    # Decide trainer vs. optimizer
-    if not args.optimize:
-        result = OffpolicyTrainer(
-            policy=masp_policy,
-            train_collector=train_collector,
-            test_collector=test_collector,
-            max_epoch=args.epoch,
-            step_per_epoch=args.step_per_epoch,
-            step_per_collect=args.step_per_collect,
-            episode_per_test=args.test_num,
-            batch_size=args.batch_size,
-            train_fn=train_fn,
-            test_fn=test_fn,
-            update_per_step=args.update_per_step,
-            test_in_train=False,
-            save_best_fn=save_best_fn,
-            logger=logger
-        ).run()
-    else:
-        # hyperparameter optimization
-        result = offpolicy_optimizer(
-            policy=masp_policy,
-            train_collector=train_collector,
-            test_collector=test_collector,
-            max_epoch=args.epoch,
-            step_per_epoch=args.step_per_epoch,
-            step_per_collect=args.step_per_collect,
-            episode_per_test=args.test_num,
-            batch_size=args.batch_size,
-            train_fn=train_fn,
-            test_fn=test_fn,
-            update_per_step=args.update_per_step,
-            test_in_train=False,
-            save_best_fn=save_best_fn,
-            trial=opt_trial
-        )
+    result = OffpolicyTrainer(
+        policy=masp_policy,
+        train_collector=train_collector,
+        test_collector=test_collector,
+        max_epoch=args.epoch,
+        step_per_epoch=args.step_per_epoch,
+        step_per_collect=args.step_per_collect,
+        episode_per_test=args.test_num,
+        batch_size=args.batch_size,
+        train_fn=train_fn,
+        test_fn=test_fn,
+        update_per_step=args.update_per_step,
+        test_in_train=False,
+        save_best_fn=save_best_fn,
+        logger=logger
+    ).run()
 
     # Always save the final model
     last_path = os.path.join(weights_path, f"{args.model_name}_last.pth")
     print(f"Saving last model to {last_path}")
     torch.save(masp_policy.policy.state_dict(), last_path)
+    logger.wandb_run.save(last_path)
 
     return result, masp_policy
 
@@ -307,6 +293,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         args.num_heads,
         device=args.device,
         dueling_param=(q_param, v_param),
+        edge_attributes=args.edge_attributes,
         aggregator_function=aggregator
     )
 
@@ -317,7 +304,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         discount_factor=args.gamma,
         estimation_step=args.n_step,
         target_update_freq=args.target_update_freq,
-        action_space=env.action_space
+        action_space=env.action_space[0]
     ).to(args.device)
 
     # Wrap in MultiAgentSharedPolicy
@@ -334,10 +321,6 @@ if __name__ == '__main__':
     args.algorithm = "hl_dgn"
     if args.watch:
         watch(args)
-
-    elif args.optimize:
-        pass
-
     else:
         result, masp_policy = train_agent(args)
         pprint.pprint(result)

@@ -36,7 +36,10 @@ class CustomSelector:
     def disable(self, agent):
         self.agents[agent]["active"] = False
 
-    def enable(self, agents):
+    def enable(self, agents, on_reset=False, source_agent=None):
+        if on_reset:
+            self.agents[source_agent]['steps'] +=1
+
         for agent in agents:
             self.agents[agent]["active"] = True if self.agents[agent]["steps"] < 4 else False
 
