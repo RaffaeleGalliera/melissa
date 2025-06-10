@@ -36,7 +36,7 @@ def get_agents(
     """
     Build or return the MultiAgentSharedPolicy, the optimizer, and list of agents.
     """
-    env = get_env(number_of_agents=args.n_agents)
+    env = get_env(number_of_agents=args.n_agents, scripted_agents_ratio=args.scripted_agents_ratio)
     observation_space = env.observation_space['observation'] if isinstance(
         env.observation_space, (gymnasium.spaces.Dict, gymnasium.spaces.Dict)
     ) else env.observation_space
@@ -58,8 +58,10 @@ def get_agents(
             args.hidden_emb,
             args.action_shape,
             args.num_heads,
+            agents_num=args.n_agents,
             device=args.device,
             dueling_param=(q_param, v_param),
+            edge_attributes=args.edge_attributes,
             aggregator_function=aggregator
         )
 
@@ -73,7 +75,7 @@ def get_agents(
             discount_factor=args.gamma,
             estimation_step=args.n_step,
             target_update_freq=args.target_update_freq,
-            action_space=env.action_space  # If discrete, Tianshou automatically handles that
+            action_space=env.action_space
         ).to(args.device)
 
     masp_policy = MultiAgentSharedPolicy(policy, env)
@@ -92,13 +94,14 @@ def watch(args: argparse.Namespace, masp_policy: BasePolicy = None) -> None:
     env = DummyVectorEnv([
         lambda: get_env(
             number_of_agents=args.n_agents,
-            heuristic=args.heuristic,
-            heuristic_params=args.heuristic_params,
             is_testing=True,
             dynamic_graph=args.dynamic_graph,
-            render_mode="human",
+            # render_mode="human",
             all_agents_source=True,
-            num_test_episodes=args.test_num
+            num_test_episodes=args.test_num,
+            heuristic=args.heuristic,
+            heuristic_params=args.heuristic_params,
+            scripted_agents_ratio=args.scripted_agents_ratio
         )
     ])
 
@@ -136,7 +139,10 @@ def train_agent(
     train_envs = SubprocVectorEnv([
         lambda: get_env(
             number_of_agents=args.n_agents,
-            dynamic_graph=args.dynamic_graph
+            dynamic_graph=args.dynamic_graph,
+            heuristic=args.heuristic,
+            heuristic_params=args.heuristic_params,
+            scripted_agents_ratio=args.scripted_agents_ratio
         )
         for _ in range(args.training_num)
     ])
@@ -145,7 +151,10 @@ def train_agent(
             number_of_agents=args.n_agents,
             dynamic_graph=args.dynamic_graph,
             is_testing=True,
-            num_test_episodes=args.test_num
+            num_test_episodes=args.test_num,
+            heuristic=args.heuristic,
+            heuristic_params=args.heuristic_params,
+            scripted_agents_ratio=args.scripted_agents_ratio
         )
     ])
 
@@ -284,6 +293,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         args.num_heads,
         device=args.device,
         dueling_param=(q_param, v_param),
+        edge_attributes=args.edge_attributes,
         aggregator_function=aggregator
     )
 

@@ -40,6 +40,7 @@ class Agent:
             one_hop_neighbors_ids=None,
             heuristic_fn=None,
             is_interested=False,
+            is_scripted=False
     ):
         self.id = agent_id
         self.name = str(agent_id)
@@ -66,7 +67,7 @@ class Agent:
         self.messages_transmitted = 0
         self.number_interested_neighbors = 0
         self.actions_history = np.zeros((4,))
-
+        self.is_scripted = is_scripted
         self.is_interested = is_interested
 
     def reset(self, local_view, pos, one_hop_neighbors_ids):
@@ -77,7 +78,8 @@ class Agent:
             pos=pos,
             one_hop_neighbors_ids=one_hop_neighbors_ids,
             heuristic_fn=self.heuristic_fn,
-            is_interested=self.is_interested
+            is_interested=self.is_interested,
+            is_scripted=self.is_scripted
         )
 
     def update_local_view(self, local_view):
@@ -116,6 +118,7 @@ class World:
             fixed_interest_density=None,
             heuristic: str = None,
             heuristic_params: dict = None,
+            scripted_agents_ratio: float = 0.0,
             **kwargs
     ):
         self.selected_graph = None
@@ -137,6 +140,12 @@ class World:
         self.movement_np_random_state = None
         self.max_node_degree = constants.MAX_NODE_DEGREE
         self.fixed_interest_density = fixed_interest_density
+        if not (0.0 <= scripted_agents_ratio <= 1.0):
+            raise ValueError("`scripted_agents_ratio` must be in [0.0, 1.0].")
+        elif scripted_agents_ratio == 0.0 and heuristic is not None:
+            raise ValueError("If `scripted_agents_ratio` is 0.0, no heuristic can be set.")
+        self.scripted_agents_ratio = scripted_agents_ratio
+        self.scripted_indices = set()
 
         if heuristic:
             if heuristic not in HEURISTIC_REGISTRY:
@@ -187,6 +196,31 @@ class World:
     @property
     def scripted_agents(self):
         return [agent for agent in self.agents if agent.action_callback is not None]
+
+    def _sample_scripted_agents(self) -> np.ndarray:
+        """
+        Return an array of vertex indices that should be scripted.
+        """
+        n_scripted = int(round(self.scripted_agents_ratio * self.num_agents))
+        scripted = set(
+            self.np_random.choice(
+                self.num_agents,
+                size=n_scripted,
+                replace=False
+            )
+        )
+
+        if self.scripted_agents_ratio < 1.0:
+            # Make sure origin agent is not scripted
+            scripted.discard(self.origin_agent)
+
+        return np.fromiter(scripted, dtype=int)
+
+    def _apply_scripted_mask(self):
+        """
+        Annotate every ``Agent`` with ``is_scripted``.
+        """
+        self.scripted_indices = set(int(i) for i in self._sample_scripted_agents())
 
     def step(self):
         for agent in self.scripted_agents:
@@ -358,16 +392,19 @@ class World:
         # Assign interest to a fraction of agents
         num_interested = int(interest_density * self.num_agents)
         interested_indices = ep_rng.choice(self.num_agents, size=num_interested, replace=False)
+        self._apply_scripted_mask()
 
         # Build agents
         for i in range(self.num_agents):
             local_graph = nx.ego_graph(self.graph, i, undirected=True)
             is_int = (i in interested_indices)
+            is_scripted = (i in self.scripted_indices)
             new_agent = Agent(
                 i,
                 local_graph,
-                heuristic_fn=self.heuristic_fn,
-                is_interested=is_int
+                heuristic_fn=self.heuristic_fn if is_scripted else None,
+                is_interested=is_int,
+                is_scripted=is_scripted,
             )
             self.agents.append(new_agent)
 
@@ -388,9 +425,8 @@ class World:
             agent.truncated = False
 
         # Set the selected heuristic function for scripted agents
-        if self.heuristic_fn:
-            for agent in self.agents:
-                agent.action_callback = self.heuristic_fn
+        for agent in self.agents:
+            agent.action_callback = self.heuristic_fn if agent.is_scripted else None
 
         # Mark the source agent: it originates the message
         source_agent = self.agents[self.origin_agent]

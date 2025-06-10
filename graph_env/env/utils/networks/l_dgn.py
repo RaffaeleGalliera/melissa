@@ -1,6 +1,3 @@
-from torch_geometric.data import Data
-from torch_geometric.nn.pool import radius_graph
-from torch_geometric.transforms import Cartesian, Distance
 from typing import Optional, Tuple, Dict, Any
 import numpy as np
 import torch
@@ -8,82 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tianshou.utils.net.common import MLP
 from torch_geometric.nn import GATv2Conv
-from torch_geometric.nn import global_max_pool
-
+from graph_env.env.utils.networks.common import build_pyg_batch_time
 from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE
-
-
-def build_pyg_batch_time(
-        obs: torch.Tensor,
-        radius: float,
-        device: torch.device,
-        input_dim: int,
-        edge_attributes: bool,
-        agents_num: int
-) -> tuple:
-    """
-    Expects obs of shape (bs, N*input_dim + 1). For example, if:
-      - input_dim=7 columns per node
-      - N=20 nodes
-      => N*input_dim=140, plus 1 controlling-agent index => 141 columns total per row
-    We then parse:
-      - The last column => controlling-agent index
-      - The first N*input_dim => node_data => shape (bs, N, input_dim)
-        (with columns [0..1] possibly for position, columns [2..6] for other features)
-
-    Steps:
-      1) ncols_without_agent = dim - 1
-      2) N = ncols_without_agent // input_dim
-      3) node_data => shape (bs, N, input_dim)
-      4) Flatten to (bs*N, input_dim)
-      5) columns [0..1] => pos, columns [2..(input_dim-1)] => node_feats
-      6) build radius_graph(pos, batch, r=radius)
-      7) controlling_agent = obs[:, -1]
-      8) return (data, agent_indices, bs)
-    """
-    if obs.ndim != 2:
-        raise ValueError(f"Expected obs to be 2D, but got shape {obs.shape}")
-    bs, dim = obs.shape  # e.g. (7, 141)
-    ncols_without_agent = dim - 1     # 140
-    # e.g. if input_dim=7 => N = 140 // 7 = 20
-    if agents_num * (2 + input_dim) != ncols_without_agent:
-        raise ValueError(
-            f"Mismatch: we have {ncols_without_agent} columns for nodes, "
-            f"but input_dim={input_dim} => N={agents_num} leaves remainder. "
-            f"obs.shape={obs.shape}"
-        )
-
-    # (bs, N, input_dim)
-    node_data = obs[:, :ncols_without_agent].reshape(-1, agents_num, (2 + input_dim)).float()
-
-    # flatten => (bs*N, input_dim)
-    x_all = node_data.reshape(-1, (2 + input_dim)).to(device)
-
-    # Suppose columns [0..1] = (pos_x, pos_y), columns [2..(input_dim)] = the GNN features
-    # If input_dim=7 => columns [2..7] => 5 features
-    pos = x_all[:, :2]     # shape (bs*N, 2)
-    node_feats = x_all[:, 2:]  # shape (bs*N, input_dim-2)
-
-    # Build PyG Data
-    batch_vec = torch.arange(bs, device=device).repeat_interleave(agents_num)
-    edge_index = radius_graph(pos, batch=batch_vec, r=radius, loop=False)
-
-    data = Data(
-        x=node_feats,   # the actual GNN features
-        pos=pos,        # used for adjacency or transforms
-        edge_index=edge_index,
-        batch=batch_vec,
-    )
-    data.ptr = torch.arange(0, (bs + 1) * agents_num, step=agents_num, device=device)
-
-    if edge_attributes:
-        data = Cartesian(norm=False, cat=True)(data)
-        data = Distance(norm=False)(data)
-
-    # controlling agent index is the last column
-    agent_indices = obs[:, -1].clamp(0, agents_num - 1).long().to(device)
-
-    return data, agent_indices, bs
 
 
 class LDGNNetwork(nn.Module):
@@ -202,6 +125,9 @@ class LDGNNetwork(nn.Module):
         x = self.conv1(x, data.edge_index)
         x = F.relu(x)
         x_2 = x[global_indices, :]
+        x = x * data.dm_mask # apply the decision-maker mask
+
+
 
         # 5) GATv2Conv #2
         x = self.conv2(x, data.edge_index)

@@ -31,6 +31,7 @@ class GraphEnv(AECEnv):
             max_cycles=100,
             device='cuda',
             local_ratio=None,
+            scripted_agents_ratio=0.0,
             heuristic=None,
             heuristic_params=None,
             is_testing=False,
@@ -48,6 +49,7 @@ class GraphEnv(AECEnv):
         self.local_ratio = local_ratio
         self.radius = radius
         self.is_new_round = None
+        self.is_testing = is_testing
 
         self.world = World(
             graph=graph,
@@ -60,7 +62,8 @@ class GraphEnv(AECEnv):
             random_graph=random_graph,
             dynamic_graph=dynamic_graph,
             all_agents_source=all_agents_source,
-            num_test_episodes=num_test_episodes
+            num_test_episodes=num_test_episodes,
+            scripted_agents_ratio=scripted_agents_ratio
             # fixed_interest_density=0.5
         )
 
@@ -74,11 +77,11 @@ class GraphEnv(AECEnv):
         # We'll store a shared observation matrix updated each step
         # shape (number_of_agents, 2 + NUMBER_OF_FEATURES)
         self.obs_matrix = np.zeros(
-            (self.number_of_agents, 2 + NUMBER_OF_FEATURES), dtype=np.float32
+            (self.number_of_agents, 2 + NUMBER_OF_FEATURES + 1), dtype=np.float32
         )
 
         # Flattened dimension = N*(2+NUMBER_OF_FEATURES) + 1 controlling-agent-index
-        obs_dim = self.number_of_agents * (2 + NUMBER_OF_FEATURES) + 1
+        obs_dim = self.number_of_agents * (2 + NUMBER_OF_FEATURES + 1) + 1
 
         self.action_spaces = {}
         self.observation_spaces = {}
@@ -238,9 +241,9 @@ class GraphEnv(AECEnv):
 
         self.agents = [
             agent.name for agent in self.world.agents
-            if agent.state.has_message and not agent.state.message_origin
+            if agent.state.has_message and (True if self.is_testing else not agent.is_scripted)
         ]
-        self._agent_selector.enable(self.agents)
+        self._agent_selector.enable(self.agents, on_reset=True, source_agent = self.world.agents[self.world.origin_agent].name)
         self.agent_selection = self._agent_selector.next()
         self.current_actions = [None] * self.number_of_agents
 
@@ -264,6 +267,9 @@ class GraphEnv(AECEnv):
         has_message_flag = 1.0 if (agent_obj.state.has_message or agent_obj.state.message_origin) else 0.0
         self.obs_matrix[idx, 5] = interested_flag
         self.obs_matrix[idx, 6] = has_message_flag
+        dm_flag = 0.0 if agent_obj.is_scripted else 1.0
+        self.obs_matrix[idx, 7] = dm_flag
+
 
     def _was_dead_step(self, action: ActionType) -> None:
         if action is not None:
@@ -330,8 +336,8 @@ class GraphEnv(AECEnv):
             self.agents = [
                 agent.name for agent in self.world.agents
                 if agent.state.has_message
-                   and not agent.state.message_origin
                    and agent.name in self.terminations
+                   and (True if self.is_testing else not agent.is_scripted)
             ]
             self._agent_selector.enable(self.agents)
             self._agent_selector.start_new_round()

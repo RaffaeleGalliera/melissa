@@ -178,8 +178,8 @@ class TestWorldHeuristics:
             radius=0.2,
             np_random=np_random,
             graph=graph,
-            is_scripted=True,
-            heuristic_policy="simple_broadcast"
+            scripted_agents_ratio=1.0,
+            heuristic="simple_broadcast"
         )
 
         src = world.origin_agent
@@ -223,7 +223,8 @@ class TestWorldHeuristics:
             np_random=np_random,
             graph=graph,
             is_scripted=True,
-            heuristic_policy="probabilistic_relay",
+            scripted_agents_ratio=1.0,
+            heuristic="probabilistic_relay",
             heuristic_params={"prob": 0.0}
         )
 
@@ -252,7 +253,8 @@ class TestWorldHeuristics:
             np_random=np_random,
             graph=graph,
             is_scripted=True,
-            heuristic_policy="probabilistic_relay",
+            scripted_agents_ratio=1.0,
+            heuristic="probabilistic_relay",
             heuristic_params={"prob": 1.0}
         )
 

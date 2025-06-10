@@ -66,7 +66,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save-study", action="store_true", default=False, help="Save study")
     parser.add_argument("--heuristic", type=str, default=None, help="Heuristic function to use")
     parser.add_argument("--heuristic-params", nargs = "*", default = [], help = "List of key=value pairs for heuristic, e.g. prob=0.3 alpha=2")
-
+    parser.add_argument("--scripted-agents-ratio", type=float, default=0.0, help="Ratio of scripted agents in the environment")
     return parser
 
 
@@ -122,7 +122,8 @@ def get_env(
     is_testing=False,
     dynamic_graph=False,
     all_agents_source=False,
-    num_test_episodes=None
+    num_test_episodes=None,
+    scripted_agents_ratio=None
 ) -> PettingZooEnv:
     """
     Create and wrap the GraphEnv in a PettingZooEnv interface.
@@ -137,6 +138,7 @@ def get_env(
         is_testing=is_testing,
         dynamic_graph=dynamic_graph,
         all_agents_source=all_agents_source,
-        num_test_episodes=num_test_episodes
+        num_test_episodes=num_test_episodes,
+        scripted_agents_ratio=scripted_agents_ratio
     )
     return PettingZooEnv(env)
