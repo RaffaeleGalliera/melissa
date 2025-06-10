@@ -382,7 +382,7 @@ class World:
             self.movement_np_random = np.random.RandomState(movement_seed)
 
             chosen_source_id = ep_rng.randint(0, self.num_agents)
-            interest_density = ep_rng.uniform(0.0, 1.0) if self.fixed_interest_density is None else self.fixed_interest_density
+            interest_density = ep_rng.uniform(0.1, 1.0) if self.fixed_interest_density is None else self.fixed_interest_density
 
 
         self.agents = []
