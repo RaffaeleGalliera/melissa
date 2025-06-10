@@ -39,7 +39,7 @@ class HLDGNNetwork(nn.Module):
 
         # Encoder maps raw node features (minus mask) to hidden_dim
         self.encoder = MLP(
-            input_dim=input_dim - 1,
+            input_dim=input_dim,
             hidden_sizes=[hidden_dim],
             output_dim=hidden_dim,
             device=self.device,

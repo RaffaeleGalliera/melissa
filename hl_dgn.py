@@ -26,7 +26,7 @@ from graph_env.env.utils.networks.hl_dgn import HLDGNNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
 from graph_env.env.utils.collectors.multi_agent_collector import MultiAgentCollector
 
-from common import get_args, get_env, select_aggregator
+from common import get_args, get_env
 
 def get_agents(
     args: argparse.Namespace,
@@ -45,9 +45,6 @@ def get_agents(
     args.max_action = 1  # Not strictly used if env is discrete, but keep for consistency
 
     if policy is None:
-        # Construct aggregator
-        aggregator = select_aggregator(args.aggregator_function)
-
         # Q and V param
         q_param = {"hidden_sizes": args.dueling_q_hidden_sizes}
         v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
@@ -62,7 +59,7 @@ def get_agents(
             device=args.device,
             dueling_param=(q_param, v_param),
             edge_attributes=args.edge_attributes,
-            aggregator_function=aggregator
+            aggregator=args.aggregator_function
         )
 
         # Optimizer
@@ -280,8 +277,6 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         print("Fail to restore policy and optim. Exiting.")
         exit(0)
 
-    # Construct aggregator
-    aggregator = select_aggregator(args.aggregator_function)
     q_param = {"hidden_sizes": args.dueling_q_hidden_sizes}
     v_param = {"hidden_sizes": args.dueling_v_hidden_sizes}
 
@@ -294,7 +289,7 @@ def load_policy(path: str, args: argparse.Namespace, env: DummyVectorEnv) -> Bas
         device=args.device,
         dueling_param=(q_param, v_param),
         edge_attributes=args.edge_attributes,
-        aggregator_function=aggregator
+        aggregator=args.aggregator_function
     )
 
     optim = torch.optim.Adam(net.parameters(), lr=args.lr)

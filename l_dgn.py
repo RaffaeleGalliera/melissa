@@ -27,7 +27,7 @@ from graph_env.env.utils.networks.l_dgn import LDGNNetwork
 from graph_env.env.utils.policies.multi_agent_managers.shared_policy import MultiAgentSharedPolicy
 from graph_env.env.utils.collectors.multi_agent_collector import MultiAgentCollector
 
-from common import get_args, get_env, select_aggregator
+from common import get_args, get_env
 
 def get_agents(
     args: argparse.Namespace,

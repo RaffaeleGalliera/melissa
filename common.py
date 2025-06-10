@@ -40,7 +40,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--render", type=float, default=0.0)
     parser.add_argument('--dueling-q-hidden-sizes', type=int, nargs='*', default=[128, 128])
     parser.add_argument('--dueling-v-hidden-sizes', type=int, nargs='*', default=[128, 128])
-    parser.add_argument("--aggregator-function", type=str, default="global_max_pool")
+    parser.add_argument("--aggregator-function", type=str, default="max")
     parser.add_argument("--edge-attributes", action="store_true", default=False)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--resume-path", type=str, default=None)
@@ -96,21 +96,6 @@ def get_args() -> argparse.Namespace:
         params[k] = v2
     args.heuristic_params = params
     return args
-
-
-def select_aggregator(name: str) -> Callable:
-    """
-    Return the corresponding global aggregator function given its name.
-    """
-    if name == "global_max_pool":
-        return global_max_pool
-    elif name == "global_mean_pool":
-        return global_mean_pool
-    elif name == "global_add_pool":
-        return global_add_pool
-    else:
-        raise ValueError(f"Unknown aggregator function: {name}")
-
 
 def get_env(
     number_of_agents: int = 20,

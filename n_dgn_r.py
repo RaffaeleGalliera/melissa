@@ -29,7 +29,7 @@ from graph_env.env.utils.policies.n_dgn import DGNPolicy
 
 from graph_env.env.utils.collectors.collective_experience_collector import CollectiveExperienceCollector
 
-from common import get_args, get_env, select_aggregator
+from common import get_args, get_env
 
 def get_agents(
     args: argparse.Namespace,
