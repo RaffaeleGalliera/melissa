@@ -7,6 +7,7 @@ import torch
 from torch_geometric.nn import global_add_pool, global_max_pool, global_mean_pool
 from tianshou.env.pettingzoo_env import PettingZooEnv
 from graph_env import graph_env_v0
+from graph_env import influence_graph_env_v0
 from graph_env.env.utils.constants import RADIUS_OF_INFLUENCE
 
 os.environ["SDL_VIDEODRIVER"] = "x11"
@@ -17,6 +18,7 @@ def get_parser() -> argparse.ArgumentParser:
     Build and return the argument parser with all hyperparameters.
     """
     parser = argparse.ArgumentParser(description="Refactored HL-DGN Training Script")
+    parser.add_argument("--influence-env", action="store_true", default=False, help="Use InfluenceGraphEnv")
     parser.add_argument("--seed", type=int, default=9)
     parser.add_argument("--eps-test", type=float, default=0.001)
     parser.add_argument("--eps-train", type=float, default=1.0)
@@ -108,12 +110,14 @@ def get_env(
     dynamic_graph=False,
     all_agents_source=False,
     num_test_episodes=None,
-    scripted_agents_ratio=None
+    scripted_agents_ratio=None,
+    influence_env: bool = False
 ) -> PettingZooEnv:
     """
     Create and wrap the GraphEnv in a PettingZooEnv interface.
     """
-    env = graph_env_v0.env(
+    graph_env = influence_graph_env_v0 if influence_env else graph_env_v0
+    env = graph_env.env(
         graph=graph,
         render_mode=render_mode,
         number_of_agents=number_of_agents,

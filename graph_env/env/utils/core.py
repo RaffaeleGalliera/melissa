@@ -437,6 +437,88 @@ class World:
         self.step()
 
 
+class InfluenceWorld(World):
+    """
+    An extension of World that implements a Dynamic Linear-Threshold (DLT)
+    influence diffusion model over a (possibly dynamic) graph.
+    - Assigns per-node thresholds and per-pair weights at episode start.
+    - On each step, nodes that forwarded last round influence their neighbors
+      according to the LT rule (weights fixed, edges can appear/disappear).
+    """
+    def __init__(
+        self,
+        model="LT",
+        **kwargs,
+    ):
+        self.model = model
+        self.theta = None
+        self.influence_weights = None
+        super().__init__(
+            **kwargs,
+        )
+
+
+    def reset(self):
+        n = self.num_agents
+
+        # draw a threshold θ_v ∼ Uniform[0,1] for each node
+        self.theta = self.np_random.random(size=n)
+        # draw a full influence-weight matrix W[u,v] ∼ Uniform[0,1)
+        W = self.np_random.random(size=(n, n))
+        np.fill_diagonal(W, 0.0)
+        # 4) normalize columns so that ∑_u W[u,v] ≤ 1
+        col_sums = W.sum(axis=0)
+        nonzero = col_sums > 0
+        W[:, nonzero] /= col_sums[nonzero]
+        self.influence_weights = W
+        super().reset()
+
+
+    def step(self):
+        # 1) process scripted heuristics & agent actions as in World
+        super_actions = []  # we ignore relay_message: use influence instead
+        for agent in self.scripted_agents:
+            # existing scripted logic
+            pass
+
+        # let each scripted agent set agent.action, then proceed
+        # 2) collect broadcasters: those corrected & forwarded last round
+        broadcasters = [a.id for a in self.agents if a.state.has_message and a.action == 1]
+
+        # 3) optionally update dynamic graph connections
+        if self.dynamic_graph:
+            self.move_graph()
+
+        # 4) apply DLT activation: for each still-misinformed node
+        for agent in self.agents:
+            v = agent.id
+            if agent.state.has_message:
+                continue
+
+            # sum weights from broadcast neighbors that are present
+            incoming = [u for u in broadcasters if self.graph.has_edge(u, v)]
+            total_inf = sum(self.influence_weights[u, v] for u in incoming)
+            if self.model == "LT":
+                if total_inf >= self.theta[v]:
+                    agent.state.has_message = True
+            else:
+                # IC: each broadcaster u tries with p=W[u,v]
+                for u in incoming:
+                    p = self.influence_weights[u, v]
+                    if self.np_random.random() < p:
+                        agent.state.has_message = True
+                        break
+
+        # update local views for downstream policies
+        for agent in self.agents:
+            self.update_local_graph(agent)
+
+        # reset per-step masks & counters
+        for agent in self.scripted_agents:
+            agent.state.relays_for.fill(0)
+            agent.action = 0
+
+
 def create_connected_graph(n, radius):
     while True:
         graph = nx.random_geometric_graph(n=n, radius=radius)
