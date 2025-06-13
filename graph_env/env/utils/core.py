@@ -363,7 +363,7 @@ class World:
 
             chosen_source_id = ep_rng.randint(0, self.num_agents)
             fixed_interest_densities = [i / 10.0 for i in range(1, 11)]
-            interest_density = fixed_interest_densities[self.test_episode_index % len(fixed_interest_densities)]
+            interest_density = fixed_interest_densities[self.test_episode_index % len(fixed_interest_densities)] if self.fixed_interest_density is None else self.fixed_interest_density
             print(
                 f"Testing episode {self.test_episode_index}, seed {episode_seed}, "
                 f"graph {selected_graph_path}, interest density {interest_density}"
@@ -438,85 +438,135 @@ class World:
 
 
 class InfluenceWorld(World):
-    """
-    An extension of World that implements a Dynamic Linear-Threshold (DLT)
-    influence diffusion model over a (possibly dynamic) graph.
-    - Assigns per-node thresholds and per-pair weights at episode start.
-    - On each step, nodes that forwarded last round influence their neighbors
-      according to the LT rule (weights fixed, edges can appear/disappear).
-    """
-    def __init__(
-        self,
-        model="LT",
-        **kwargs,
-    ):
-        self.model = model
-        self.theta = None
-        self.influence_weights = None
-        super().__init__(
-            **kwargs,
-        )
+    def __init__(self, model: str = "LT", **kwargs):
+        self.model = model  # "LT" or "IC"
+        self.theta: np.ndarray | None = None          # (N,)
+        self.influence_weights: np.ndarray | None = None  # (N,N)
+        self.infl_class: np.ndarray | None = None     # (N,N) int8
+        super().__init__(**kwargs)
 
+    def _sample_weights_and_thresholds(self) -> None:
+        """
+        Draw W, θ with two guarantees:
+        (i) every node u has at least one out-edge ≥ θ_target
+        (ii) for any pair (u,v) only one direction can satisfy that property.
+        Columns end exactly at 1 after all adjustments.
+        """
+        n = self.num_agents
+        rng = self.np_random
+
+        # 1) raw weights  ~ U(0,1)   – no self loops
+        W = rng.random((n, n))
+        np.fill_diagonal(W, 0.)
+
+        # 2) column-normalise  Σ_u W[u,v]=1   (skip empty)
+        col_sum = W.sum(axis=0, keepdims=True)
+        nz_cols = col_sum > 0
+        W[:, nz_cols[0]] /= col_sum[0, nz_cols[0]]
+
+        # 3) thresholds  θ_v  ~ Beta(1,3)
+        theta = rng.beta(1, 3, size=n)
+
+        # 4) guarantee one strong out-edge per source
+        for u in range(n):
+            v_star = np.argmax(W[u])
+            if W[u, v_star] < theta[v_star]:
+                # raise that weight
+                W[u, v_star] = theta[v_star]
+
+                # --- recompute column sum and renormalise *other* entries ---
+                col_total = W[:, v_star].sum()
+                if col_total > 1e-9:
+                    scale = (1.0 - W[u, v_star]) / (col_total - W[u, v_star])
+                    for p in range(n):
+                        if p != u:
+                            W[p, v_star] *= scale
+
+        # 5) impose directional asymmetry
+        for u in range(n):
+            for v in range(u + 1, n):
+                if W[u, v] >= theta[v] and W[v, u] >= theta[u]:
+                    # lower the smaller one
+                    if W[u, v] <= W[v, u]:
+                        src, dst = u, v
+                    else:
+                        src, dst = v, u
+                    W[src, dst] = 0.9 * theta[dst]
+
+                    # --- renormalise dst column again ---
+                    col_total = W[:, dst].sum()
+                    if col_total > 1e-9:
+                        scale = (1.0 - W[src, dst]) / (col_total - W[src, dst])
+                        for p in range(n):
+                            if p != src:
+                                W[p, dst] *= scale
+
+        # 6) numerical clip (<=1e-6 tolerance)
+        W = np.clip(W, 0.0, 1.0)
+        col_err = np.abs(W.sum(axis=0) - 1.0)
+
+        # 7) store
+        self.influence_weights = W.astype(np.float32)
+        self.theta = theta.astype(np.float32)
+
+        # 8) integer class matrix – data-driven quantiles
+        nz_vals = W[W > 0]
+        q_low, q_high = np.quantile(nz_vals, [0.33, 0.67])
+        infl_cls = np.full_like(W, -1, dtype=np.int8)
+        infl_cls[W >= q_high] = 2
+        infl_cls[(W >= q_low) & (W < q_high)] = 1
+        infl_cls[(W > 0) & (W < q_low)] = 0
+        np.fill_diagonal(infl_cls, -1)
+        self.infl_class = infl_cls
 
     def reset(self):
-        n = self.num_agents
-
-        # draw a threshold θ_v ∼ Uniform[0,1] for each node
-        self.theta = self.np_random.random(size=n)
-        # draw a full influence-weight matrix W[u,v] ∼ Uniform[0,1)
-        W = self.np_random.random(size=(n, n))
-        np.fill_diagonal(W, 0.0)
-        # 4) normalize columns so that ∑_u W[u,v] ≤ 1
-        col_sums = W.sum(axis=0)
-        nonzero = col_sums > 0
-        W[:, nonzero] /= col_sums[nonzero]
-        self.influence_weights = W
+        self._sample_weights_and_thresholds()
         super().reset()
 
-
     def step(self):
-        # 1) process scripted heuristics & agent actions as in World
-        super_actions = []  # we ignore relay_message: use influence instead
+        """One environment tick implementing LT / IC diffusion on the
+        *current* graph snapshot.  Agents' `action` ∈ {0 (silent), 1 (forward)}
+        is set by external RL policy or scripted logic.
+        """
+        # 1) scripted agents may decide their action (reuse parent helper)
         for agent in self.scripted_agents:
-            # existing scripted logic
-            pass
+            pass  # placeholder – keep whatever the parent does
 
-        # let each scripted agent set agent.action, then proceed
-        # 2) collect broadcasters: those corrected & forwarded last round
+        # 2) collect broadcasters
         broadcasters = [a.id for a in self.agents if a.state.has_message and a.action == 1]
 
-        # 3) optionally update dynamic graph connections
+        # 3) update dynamic topology if enabled
         if self.dynamic_graph:
             self.move_graph()
 
-        # 4) apply DLT activation: for each still-misinformed node
-        for agent in self.agents:
-            v = agent.id
-            if agent.state.has_message:
+        # 4) diffusion update
+        for ag in self.agents:
+            v = ag.id
+            if ag.state.has_message:
                 continue
-
-            # sum weights from broadcast neighbors that are present
-            incoming = [u for u in broadcasters if self.graph.has_edge(u, v)]
-            total_inf = sum(self.influence_weights[u, v] for u in incoming)
+            # sum weights from visible broadcasters
+            inc = [u for u in broadcasters if self.graph.has_edge(u, v)]
+            if not inc:
+                continue
             if self.model == "LT":
+                total_inf = self.influence_weights[inc, v].sum()
                 if total_inf >= self.theta[v]:
-                    agent.state.has_message = True
-            else:
-                # IC: each broadcaster u tries with p=W[u,v]
-                for u in incoming:
-                    p = self.influence_weights[u, v]
-                    if self.np_random.random() < p:
-                        agent.state.has_message = True
+                    ag.state.has_message = True
+            else:  # IC
+                for u in inc:
+                    if self.np_random.random() < self.influence_weights[u, v]:
+                        ag.state.has_message = True
                         break
 
-        # update local views for downstream policies
+        # 5) refresh agents' local neighbour masks (for obs construction)
         for agent in self.agents:
             self.update_local_graph(agent)
 
-        # reset per-step masks & counters
+        # 6) reset scripted‑agent per‑step fields (optional upkeep)
         for agent in self.scripted_agents:
             agent.state.relays_for.fill(0)
             agent.action = 0
+
 
 
 def create_connected_graph(n, radius):

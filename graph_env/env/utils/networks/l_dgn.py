@@ -127,8 +127,6 @@ class LDGNNetwork(nn.Module):
         x_2 = x[global_indices, :]
         x = x * data.dm_mask # apply the decision-maker mask
 
-
-
         # 5) GATv2Conv #2
         x = self.conv2(x, data.edge_index)
         x = F.relu(x)
