@@ -528,18 +528,15 @@ class InfluenceWorld(World):
         *current* graph snapshot.  Agents' `action` ∈ {0 (silent), 1 (forward)}
         is set by external RL policy or scripted logic.
         """
-        # 1) scripted agents may decide their action (reuse parent helper)
         for agent in self.scripted_agents:
             pass  # placeholder – keep whatever the parent does
 
-        # 2) collect broadcasters
+        self.agents[self.origin_agent].action = 1 if self.agents[self.origin_agent].messages_transmitted == 0 else self.agents[self.origin_agent].action
         broadcasters = [a.id for a in self.agents if a.state.has_message and a.action == 1]
 
-        # 3) update dynamic topology if enabled
         if self.dynamic_graph:
             self.move_graph()
 
-        # 4) diffusion update
         for ag in self.agents:
             v = ag.id
             if ag.state.has_message:
@@ -558,15 +555,12 @@ class InfluenceWorld(World):
                         ag.state.has_message = True
                         break
 
-        # 5) refresh agents' local neighbour masks (for obs construction)
         for agent in self.agents:
             self.update_local_graph(agent)
 
-        # 6) reset scripted‑agent per‑step fields (optional upkeep)
         for agent in self.scripted_agents:
             agent.state.relays_for.fill(0)
             agent.action = 0
-
 
 
 def create_connected_graph(n, radius):
