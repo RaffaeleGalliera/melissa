@@ -169,3 +169,16 @@ def test_static_graph_not_moved(env):
     _prep_broadcast(env, broadcasters=[0], uninformed=[1, 2])
     world.step()
     assert set(before_edges) == set(world.graph.edges())
+
+def test_always_forward_covers_entire_network(env):
+    env.reset()
+    while True:
+        # If truncated suspend the test
+        if any(env.truncations.values()):
+            # Check all agents have received the message
+            for ag in env.agents:
+                assert env.world.agents[ag].state.has_message, f"Agent {ag} did not receive the message"
+            break
+
+        # Else step always forward
+        env.step(1)

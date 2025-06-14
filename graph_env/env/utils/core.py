@@ -445,83 +445,185 @@ class InfluenceWorld(World):
         self.infl_class: np.ndarray | None = None     # (N,N) int8
         super().__init__(**kwargs)
 
-    def _sample_weights_and_thresholds(self) -> None:
-        """
-        Draw W, θ with two guarantees:
-        (i) every node u has at least one out-edge ≥ θ_target
-        (ii) for any pair (u,v) only one direction can satisfy that property.
-        Columns end exactly at 1 after all adjustments.
-        """
+    def _sample_weights_and_thresholds(self):
+        rng, G = self.np_random, self.graph
         n = self.num_agents
-        rng = self.np_random
 
-        # 1) raw weights  ~ U(0,1)   – no self loops
-        W = rng.random((n, n))
-        np.fill_diagonal(W, 0.)
+        W = np.zeros((n, n), dtype=np.float32)
+        for v in range(n):
+            neigh = [int(getattr(u, "id", u)) for u in G.neighbors(v)]
+            k = len(neigh)
+            if k == 0:
+                raise RuntimeError("Graph contains isolated node; LT infeasible.")
+            W[neigh, v] = rng.dirichlet(alpha=np.ones(k))  # sums to 1
 
-        # 2) column-normalise  Σ_u W[u,v]=1   (skip empty)
-        col_sum = W.sum(axis=0, keepdims=True)
-        nz_cols = col_sum > 0
-        W[:, nz_cols[0]] /= col_sum[0, nz_cols[0]]
+        theta = 0.9 * W.max(axis=0)
 
-        # 3) thresholds  θ_v  ~ Beta(1,3)
-        theta = rng.beta(1, 3, size=n)
-
-        # 4) guarantee one strong out-edge per source
         for u in range(n):
-            v_star = np.argmax(W[u])
-            if W[u, v_star] < theta[v_star]:
-                # raise that weight
-                W[u, v_star] = theta[v_star]
+            v = np.argmax(W[u])
+            if W[u, v] < theta[v]:
+                theta[v] = 0.9 * W[u, v]
 
-                # --- recompute column sum and renormalise *other* entries ---
-                col_total = W[:, v_star].sum()
-                if col_total > 1e-9:
-                    scale = (1.0 - W[u, v_star]) / (col_total - W[u, v_star])
-                    for p in range(n):
-                        if p != u:
-                            W[p, v_star] *= scale
-
-        # 5) impose directional asymmetry
         for u in range(n):
-            for v in range(u + 1, n):
+            for v in (int(getattr(x, "id", x)) for x in G.neighbors(u)):
+                if u >= v:  # handle each unordered pair once
+                    continue
                 if W[u, v] >= theta[v] and W[v, u] >= theta[u]:
-                    # lower the smaller one
-                    if W[u, v] <= W[v, u]:
-                        src, dst = u, v
+                    if G.degree[u] == 1 and G.degree[v] == 1:
+                        continue  # mutual‑leaf exemption
+                    # Determine weaker edge
+                    if W[u, v] < W[v, u]:
+                        weak_src, weak_dst = u, v
                     else:
-                        src, dst = v, u
-                    W[src, dst] = 0.9 * theta[dst]
+                        weak_src, weak_dst = v, u
 
-                    # --- renormalise dst column again ---
-                    col_total = W[:, dst].sum()
-                    if col_total > 1e-9:
-                        scale = (1.0 - W[src, dst]) / (col_total - W[src, dst])
-                        for p in range(n):
-                            if p != src:
-                                W[p, dst] *= scale
+                    # Lower weaker edge just below θ_dst
+                    new_w = 0.95 * theta[weak_dst]
+                    diff = W[weak_src, weak_dst] - new_w
+                    W[weak_src, weak_dst] = new_w
 
-        # 6) numerical clip (<=1e-6 tolerance)
-        W = np.clip(W, 0.0, 1.0)
-        col_err = np.abs(W.sum(axis=0) - 1.0)
+                    # Redistribute the removed mass to other incoming edges of column dst
+                    others = [p for p in G.neighbors(weak_dst) if p != weak_src]
+                    if others and diff > 0:
+                        total_other = W[others, weak_dst].sum()
+                        if total_other > 0:
+                            W[others, weak_dst] += diff * (W[others, weak_dst] / total_other)
+                        else:
+                            # evenly distribute if others were zero (rare)
+                            W[others, weak_dst] += diff / len(others)
+                    # Re‑normalise column exactly
+                    W[:, weak_dst] /= W[:, weak_dst].sum()
 
-        # 7) store
+        theta = np.clip(theta, 1e-6, 1.0)
+        # Column guarantee: every node can be activated
+        for v in range(n):
+            max_in = W[:, v].max()
+            if max_in < theta[v]:
+                theta[v] = 0.9 * max_in
+        # Row guarantee: every node can activate someone
+        for u in range(n):
+            out_max_idx = np.argmax(W[u])
+            if W[u, out_max_idx] < theta[out_max_idx]:
+                theta[out_max_idx] = 0.9 * W[u, out_max_idx]
+
+        assert np.allclose(W.sum(axis=0), 1.0, atol=1e-9)
+        for v in range(n):
+            assert W[:, v].max() >= theta[v]
+        for u in range(n):
+            out_max_idx = np.argmax(W[u])
+            assert W[u, out_max_idx] >= theta[out_max_idx]
+
         self.influence_weights = W.astype(np.float32)
         self.theta = theta.astype(np.float32)
 
-        # 8) integer class matrix – data-driven quantiles
-        nz_vals = W[W > 0]
-        q_low, q_high = np.quantile(nz_vals, [0.33, 0.67])
-        infl_cls = np.full_like(W, -1, dtype=np.int8)
-        infl_cls[W >= q_high] = 2
-        infl_cls[(W >= q_low) & (W < q_high)] = 1
-        infl_cls[(W > 0) & (W < q_low)] = 0
-        np.fill_diagonal(infl_cls, -1)
-        self.infl_class = infl_cls
+        nz = W[W > 0]
+        q1, q2 = np.quantile(nz, [0.33, 0.67])
+        infl = np.full_like(W, -1, dtype=np.int8)
+        infl[W >= q2] = 2
+        infl[(W >= q1) & (W < q2)] = 1
+        infl[(W > 0) & (W < q1)] = 0
+        np.fill_diagonal(infl, -1)
+        self.infl_class = infl
 
     def reset(self):
+        """
+        If in testing mode, pick from `test_seeds_list` in strict order.
+        If in training mode, sample a new seed from self.np_random.
+        """
+        if self.is_testing:
+            if not self.test_seeds_list:
+                raise ValueError("No test seeds have been generated! Check num_test_episodes.")
+            episode_seed = self.test_seeds_list[self.test_episode_index]
+            self.test_episode_index = (self.test_episode_index + 1) % self.num_test_episodes
+            ep_rng = np.random.RandomState(episode_seed)
+
+            if not self.test_graphs:
+                raise ValueError("No test graphs found!")
+            selected_graph_path = ep_rng.choice(self.test_graphs)
+            self.selected_graph = load_graph(selected_graph_path)
+            self.graph = self.selected_graph
+
+            movement_seed = ep_rng.randint(0, 1e9)
+            self.movement_np_random = np.random.RandomState(movement_seed)
+
+            chosen_source_id = ep_rng.randint(0, self.num_agents)
+            fixed_interest_densities = [i / 10.0 for i in range(1, 11)]
+            interest_density = fixed_interest_densities[self.test_episode_index % len(
+                fixed_interest_densities)] if self.fixed_interest_density is None else self.fixed_interest_density
+            print(
+                f"Testing episode {self.test_episode_index}, seed {episode_seed}, "
+                f"graph {selected_graph_path}, interest density {interest_density}"
+            )
+        else:
+            episode_seed = self.np_random.integers(0, 1e9)
+            ep_rng = np.random.RandomState(episode_seed)
+
+            if self.random_graph:
+                self.graph = create_connected_graph(n=self.num_agents, radius=self.radius)
+            elif not self.is_graph_fixed:
+                self.selected_graph = self.np_random.choice(self.train_graphs, replace=True)
+                self.graph = load_graph(self.selected_graph)
+
+            movement_seed = ep_rng.randint(0, 1e9)
+            self.movement_np_random = np.random.RandomState(movement_seed)
+
+            chosen_source_id = ep_rng.randint(0, self.num_agents)
+            interest_density = ep_rng.uniform(0.1,
+                                              1.0) if self.fixed_interest_density is None else self.fixed_interest_density
+
+        self.agents = []
+        self.messages_transmitted = 0
+        self.origin_agent = chosen_source_id
+
+        # Assign interest to a fraction of agents
+        num_interested = int(interest_density * self.num_agents)
+        interested_indices = ep_rng.choice(self.num_agents, size=num_interested, replace=False)
+        self._apply_scripted_mask()
+
+        # Build agents
+        for i in range(self.num_agents):
+            local_graph = nx.ego_graph(self.graph, i, undirected=True)
+            is_int = (i in interested_indices)
+            is_scripted = (i in self.scripted_indices)
+            new_agent = Agent(
+                i,
+                local_graph,
+                heuristic_fn=self.heuristic_fn if is_scripted else None,
+                is_interested=is_int,
+                is_scripted=is_scripted,
+            )
+            self.agents.append(new_agent)
+
+        # Initialize each agent's arrays and neighbors
+        for agent in self.agents:
+            agent.state.reset(self.num_agents)
+            self.update_one_hop_neighbors_info(agent)
+            self.graph.nodes[agent.id]['label'] = agent.id
+
+        for agent in self.agents:
+            agent.reset(
+                local_view=nx.ego_graph(self.graph, agent.id, undirected=True),
+                pos=self.graph.nodes[agent.id]['pos'],
+                one_hop_neighbors_ids=agent.one_hop_neighbours_ids
+            )
+            self.update_two_hop_neighbors_info(agent)
+            agent.steps_taken = 0
+            agent.truncated = False
+
+        # Set the selected heuristic function for scripted agents
+        for agent in self.agents:
+            agent.action_callback = self.heuristic_fn if agent.is_scripted else None
+
+        # Mark the source agent: it originates the message
+        source_agent = self.agents[self.origin_agent]
+        source_agent.state.message_origin = True
+        source_agent.state.has_message = True
+        source_agent.steps_taken = 1
+
+        # Sample influence weights and thresholds
         self._sample_weights_and_thresholds()
-        super().reset()
+
+        self.step()
 
     def step(self):
         """One environment tick implementing LT / IC diffusion on the
@@ -548,6 +650,11 @@ class InfluenceWorld(World):
             if self.model == "LT":
                 total_inf = self.influence_weights[inc, v].sum()
                 if total_inf >= self.theta[v]:
+                    for u in inc:
+                        ag.state.received_from[u] += 1
+                        self.agents[u].state.transmitted_to[v] += 1
+                        self.agents[u].messages_transmitted += 1
+                    self.messages_transmitted += 1
                     ag.state.has_message = True
             else:  # IC
                 for u in inc:
