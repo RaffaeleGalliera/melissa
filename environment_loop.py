@@ -12,7 +12,7 @@ all nodes in the world hold the message or when max_cycles is reached.
 
 
 def run_debug_loop(
-    n_agents: int = 20,
+    n_agents: int = 50,
     radius: float = 0.2,
     render: bool = True,
     step_sleep: float = 0.25,  # seconds between renders
@@ -22,7 +22,7 @@ def run_debug_loop(
         radius=radius,
         render_mode="human" if render else None,
     )
-    env.seed(42)
+    env.seed(17)
     env.reset()
     done = False
 
@@ -31,10 +31,7 @@ def run_debug_loop(
             break
         current_agent = env.agent_selection
         obs = env.observe(current_agent)
-        action_mask = obs["action_mask"]
-
-        # always broadcast if allowed, else 0
-        action = 1 if action_mask[1] == 1 else 0
+        action = 1
         env.step(action)
 
         if render:

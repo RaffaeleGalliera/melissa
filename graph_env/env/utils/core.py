@@ -446,78 +446,96 @@ class InfluenceWorld(World):
         super().__init__(**kwargs)
 
     def _sample_weights_and_thresholds(self):
+
+        """Sample θ and W for the Linear‑Threshold model.
+
+        Steps
+        -----
+        1. θ_v ∼ Beta(1, 3)  (skew toward easier activation).
+        2. Choose for every node **one neighbour** to be its guaranteed
+           first‑hop target.  The algorithm tries to keep these targets
+           unique; duplicates are allowed only if a node’s entire
+           neighbourhood is already claimed.
+        3. Draw each column of **W** from a Dirichlet(α=0.2) – produces
+           a spiky column that already sums to 1.
+        4. Raise every picked edge (x → y) until `W[x,y] > θ_y`, scaling
+           *other* entries in the same column so the column sum stays 1.
+        5. Final adjustment: ensure both “can‑be‑activated” and
+           “can‑activate” guarantees hold.
+        """
+
         rng, G = self.np_random, self.graph
         n = self.num_agents
 
+        # 1. θ ~ Beta(1,3)  (values mostly in 0–0.5)
+        theta = rng.beta(1, 3, size=n).astype(np.float32)
+
+        # 2. Pick activation pairs (unique when possible)
+        unclaimed = set(range(n))
+        pairs = []
+        for x in rng.permutation(n):
+            neigh = [int(getattr(v, "id", v)) for v in G.neighbors(x)]
+            if not neigh:
+                raise RuntimeError("LT infeasible: isolated node detected.")
+            opts = [v for v in neigh if v in unclaimed]
+            y = rng.choice(opts if opts else neigh)
+            pairs.append((x, y))
+            unclaimed.discard(y)
+
+        # 3. Dirichlet(0.2)
         W = np.zeros((n, n), dtype=np.float32)
+        alpha = 0.2
         for v in range(n):
             neigh = [int(getattr(u, "id", u)) for u in G.neighbors(v)]
-            k = len(neigh)
-            if k == 0:
-                raise RuntimeError("Graph contains isolated node; LT infeasible.")
-            W[neigh, v] = rng.dirichlet(alpha=np.ones(k))  # sums to 1
+            weights = rng.dirichlet(alpha=np.full(len(neigh), alpha))
+            W[neigh, v] = weights
 
-        theta = 0.9 * W.max(axis=0)
+        # 4. Boost each picked edge above θ_y, preserve column sum = 1
+        eps = 1e-6
+        for x, y in pairs:
+            required = theta[y] + eps
+            if W[x, y] >= required:
+                continue  # already strong enough
 
-        for u in range(n):
-            v = np.argmax(W[u])
-            if W[u, v] < theta[v]:
-                theta[v] = 0.9 * W[u, v]
+            other_ids = [int(getattr(u, "id", u)) for u in G.neighbors(y) if int(getattr(u, "id", u)) != x]
+            other_total = W[other_ids, y].sum() if other_ids else 0.0
 
-        for u in range(n):
-            for v in (int(getattr(x, "id", x)) for x in G.neighbors(u)):
-                if u >= v:  # handle each unordered pair once
-                    continue
-                if W[u, v] >= theta[v] and W[v, u] >= theta[u]:
-                    if G.degree[u] == 1 and G.degree[v] == 1:
-                        continue  # mutual‑leaf exemption
-                    # Determine weaker edge
-                    if W[u, v] < W[v, u]:
-                        weak_src, weak_dst = u, v
-                    else:
-                        weak_src, weak_dst = v, u
-
-                    # Lower weaker edge just below θ_dst
-                    new_w = 0.95 * theta[weak_dst]
-                    diff = W[weak_src, weak_dst] - new_w
-                    W[weak_src, weak_dst] = new_w
-
-                    # Redistribute the removed mass to other incoming edges of column dst
-                    others = [p for p in G.neighbors(weak_dst) if p != weak_src]
-                    if others and diff > 0:
-                        total_other = W[others, weak_dst].sum()
-                        if total_other > 0:
-                            W[others, weak_dst] += diff * (W[others, weak_dst] / total_other)
-                        else:
-                            # evenly distribute if others were zero (rare)
-                            W[others, weak_dst] += diff / len(others)
-                    # Re‑normalise column exactly
-                    W[:, weak_dst] /= W[:, weak_dst].sum()
-
-        theta = np.clip(theta, 1e-6, 1.0)
-        # Column guarantee: every node can be activated
+            if other_total > eps:
+                # scale factor keeps column sum exactly 1 while raising W[x,y]
+                diff = required - W[x, y]
+                scale = (other_total - diff) / other_total
+                W[other_ids, y] *= scale
+                W[x, y] = required
+                # column sum is now: required + scale*other_total = 1.0  (exact)
+            else:
+                # x is the only neighbour with weight: give it all
+                W[:, y] = 0.0
+                W[x, y] = 1.0
+                theta[y] = 0.9 * W[x, y]  # ensure activatability to guarantee both directions of property
         for v in range(n):
             max_in = W[:, v].max()
-            if max_in < theta[v]:
+            if max_in <= theta[v]:
                 theta[v] = 0.9 * max_in
-        # Row guarantee: every node can activate someone
         for u in range(n):
-            out_max_idx = np.argmax(W[u])
-            if W[u, out_max_idx] < theta[out_max_idx]:
-                theta[out_max_idx] = 0.9 * W[u, out_max_idx]
+            v_max = np.argmax(W[u])
+            if W[u, v_max] <= theta[v_max]:
+                theta[v_max] = 0.9 * W[u, v_max]
 
-        assert np.allclose(W.sum(axis=0), 1.0, atol=1e-9)
-        for v in range(n):
-            assert W[:, v].max() >= theta[v]
-        for u in range(n):
-            out_max_idx = np.argmax(W[u])
-            assert W[u, out_max_idx] >= theta[out_max_idx]
+                # 6. Final per‑pair guarantee pass (lower θ if still violated)
+        for x, y in pairs:
+            if W[x, y] <= theta[y] - eps:
+                theta[y] = 0.9 * W[x, y]
 
+            # --- invariants ---
+            assert W[x, y] > theta[y] - eps
+
+        # 6. Store matrices
         self.influence_weights = W.astype(np.float32)
         self.theta = theta.astype(np.float32)
 
+        # 7. Edge‑class matrix (terciles)
         nz = W[W > 0]
-        q1, q2 = np.quantile(nz, [0.33, 0.67])
+        q1, q2 = np.quantile(nz, [0.33, 0.67]) if nz.size >= 3 else (0, 0)
         infl = np.full_like(W, -1, dtype=np.int8)
         infl[W >= q2] = 2
         infl[(W >= q1) & (W < q2)] = 1
@@ -641,21 +659,19 @@ class InfluenceWorld(World):
 
         for ag in self.agents:
             v = ag.id
-            if ag.state.has_message:
-                continue
             # sum weights from visible broadcasters
             inc = [u for u in broadcasters if self.graph.has_edge(u, v)]
             if not inc:
                 continue
             if self.model == "LT":
                 total_inf = self.influence_weights[inc, v].sum()
-                if total_inf >= self.theta[v]:
-                    for u in inc:
+                for u in inc:
+                    if total_inf >= self.theta[v]:
                         ag.state.received_from[u] += 1
+                        ag.state.has_message = True
                         self.agents[u].state.transmitted_to[v] += 1
-                        self.agents[u].messages_transmitted += 1
-                    self.messages_transmitted += 1
-                    ag.state.has_message = True
+                    self.agents[u].messages_transmitted += 1
+                self.messages_transmitted += 1
             else:  # IC
                 for u in inc:
                     if self.np_random.random() < self.influence_weights[u, v]:
