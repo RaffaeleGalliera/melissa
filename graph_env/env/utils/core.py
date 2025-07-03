@@ -363,7 +363,7 @@ class World:
 
             chosen_source_id = ep_rng.randint(0, self.num_agents)
             fixed_interest_densities = [i / 10.0 for i in range(1, 11)]
-            interest_density = fixed_interest_densities[self.test_episode_index % len(fixed_interest_densities)]
+            interest_density = fixed_interest_densities[self.test_episode_index % len(fixed_interest_densities)] if self.fixed_interest_density is None else self.fixed_interest_density
             print(
                 f"Testing episode {self.test_episode_index}, seed {episode_seed}, "
                 f"graph {selected_graph_path}, interest density {interest_density}"
