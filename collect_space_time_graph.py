@@ -82,8 +82,6 @@ def main() -> None:
     run_and_record(
         n_agents=args.agents,
         radius=args.radius,
-        render=args.render,
-        step_sleep=args.sleep,
         outfile=args.outfile,
         num_test_episodes=args.num_test_episodes
     )
