@@ -250,7 +250,7 @@ class World:
                 agent.action = result.action
 
         for agent in self.scripted_agents:
-            if agent.action is not None:
+            if agent.action is None:
                 agent.action = 0
                 if (not agent.state.has_taken_action) and (
                         agent.state.has_message or agent.state.message_origin
