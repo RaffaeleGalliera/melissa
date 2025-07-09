@@ -12,7 +12,9 @@ def run_debug_loop(
         number_of_agents=n_agents,
         radius=radius,
         render_mode="human" if render else None,
-        is_testing=True
+        is_testing=True,
+        num_test_episodes=10,
+        dynamic_graph=True
     )
     env.reset()
     done = False

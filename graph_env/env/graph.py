@@ -63,8 +63,8 @@ class GraphEnv(AECEnv):
             dynamic_graph=dynamic_graph,
             all_agents_source=all_agents_source,
             num_test_episodes=num_test_episodes,
-            scripted_agents_ratio=scripted_agents_ratio
-            # fixed_interest_density=0.5
+            scripted_agents_ratio=scripted_agents_ratio,
+            # fixed_interest_density=1.0
         )
 
         self.agents = [agent.name for agent in self.world.agents]
@@ -267,9 +267,8 @@ class GraphEnv(AECEnv):
         has_message_flag = 1.0 if (agent_obj.state.has_message or agent_obj.state.message_origin) else 0.0
         self.obs_matrix[idx, 5] = interested_flag
         self.obs_matrix[idx, 6] = has_message_flag
-        self.obs_matrix[idx, 7] = 4 - agent_obj.steps_taken
         dm_flag = 0.0 if agent_obj.is_scripted else 1.0
-        self.obs_matrix[idx, 8] = dm_flag
+        self.obs_matrix[idx, 7] = dm_flag
 
 
     def _was_dead_step(self, action: ActionType) -> None:

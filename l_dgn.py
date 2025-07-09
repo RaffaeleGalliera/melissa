@@ -37,7 +37,7 @@ def get_agents(
     """
     Build or return the MultiAgentSharedPolicy, the optimizer, and list of agents.
     """
-    env = get_env(number_of_agents=args.n_agents, scripted_agents_ratio=args.scripted_agents_ratio)
+    env = get_env(number_of_agents=args.n_agents, scripted_agents_ratio=0.0)
     observation_space = env.observation_space['observation'] if isinstance(
         env.observation_space, (gymnasium.spaces.Dict, gymnasium.spaces.Dict)
     ) else env.observation_space

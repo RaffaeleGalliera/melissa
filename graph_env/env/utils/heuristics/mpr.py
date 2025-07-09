@@ -1,7 +1,7 @@
 import numpy as np
 
 from graph_env.env.utils.core import Agent
-
+from .core import HeuristicResult
 
 # OLSRv1 MPR computation https://www.rfc-editor.org/rfc/rfc3626.html
 def mpr_heuristic(
@@ -69,4 +69,4 @@ def mpr_heuristic(
                 value_n, value_unc in
                 zip(local_view.nodes[key_to_add]['one_hop'], reachable_uncovered)])
 
-    return mpr
+    return HeuristicResult(relay_mask=mpr, action=None)

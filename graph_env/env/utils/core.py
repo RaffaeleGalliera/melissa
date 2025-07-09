@@ -7,6 +7,13 @@ import logging
 import networkx as nx
 from . import constants
 
+from .mobility_models import RandomWaypoint, GaussMarkov
+
+MOBILITY_REGISTRY = {
+    "none": None,
+    "random_waypoint": RandomWaypoint,
+    "gauss_markov": GaussMarkov,
+}
 
 class State:
     def __init__(self):
@@ -30,17 +37,17 @@ class State:
 
 class Agent:
     def __init__(
-            self,
-            agent_id,
-            local_view,
-            size=0.05,
-            color=(0, 0, 0),
-            state=None,
-            pos=None,
-            one_hop_neighbors_ids=None,
-            heuristic_fn=None,
-            is_interested=False,
-            is_scripted=False
+        self,
+        agent_id,
+        local_view,
+        size=0.05,
+        color=(0, 0, 0),
+        state=None,
+        pos=None,
+        one_hop_neighbors_ids=None,
+        heuristic_fn=None,
+        is_interested=False,
+        is_scripted=False
     ):
         self.id = agent_id
         self.name = str(agent_id)
@@ -101,7 +108,9 @@ class Agent:
         self.gained_two_hop_cover = new_two_hop_cover - self.two_hop_cover
         self.two_hop_cover = new_two_hop_cover
 
+
 from .heuristics import HEURISTIC_REGISTRY, HeuristicResult
+
 
 class World:
     def __init__(
@@ -119,6 +128,8 @@ class World:
             heuristic: str = None,
             heuristic_params: dict = None,
             scripted_agents_ratio: float = 0.0,
+            mobility_model: str = "gauss_markov",
+            mobility_params: dict = None,
             **kwargs
     ):
         self.selected_graph = None
@@ -186,6 +197,11 @@ class World:
                 testing_generator.randint(0, 1e9) for _ in range(num_test_episodes)
             ]
 
+        # mobility configuration
+        self.mobility_kind = mobility_model.lower()
+        self.mobility_params = mobility_params or {}
+        self.mobility = None
+
         # Do the initial reset
         self.reset()
 
@@ -225,7 +241,7 @@ class World:
     def step(self):
         for agent in self.scripted_agents:
             result: HeuristicResult = agent.action_callback(agent=agent)
-
+            agent.action = None  # Reset action for scripted agents
             if result.relay_mask is not None:
                 for nbr in np.where(result.relay_mask)[0]:
                     self.agents[nbr].state.relays_for[agent.id] = 1
@@ -234,11 +250,12 @@ class World:
                 agent.action = result.action
 
         for agent in self.scripted_agents:
-            if np.where(agent.state.relays_for)[0].size > 0:
+            if agent.action is not None:
                 agent.action = 0
                 if (not agent.state.has_taken_action) and (
                         agent.state.has_message or agent.state.message_origin
                 ):
+                    agent.state.has_taken_action = True # Mark agent as having taken a decision on this message
                     if agent.has_received_from_relayed_node() or agent.state.message_origin:
                         agent.action = 1
 
@@ -297,21 +314,29 @@ class World:
         agent.update_local_view(local_graph)
         agent.update_two_hop_cover_from_one_hopper(self.agents)
 
-    def update_position(self, step):
-        pos = nx.get_node_attributes(self.graph, "pos")
-        offset_x, offset_y = self.compute_random_movement(step)
-        new_pos = {}
-        for k, v in pos.items():
-            new_pos[k] = [v[0] + offset_x[k], v[1] + offset_y[k]]
-        nx.set_node_attributes(self.graph, new_pos, "pos")
+    def update_position(self, step: float):
+        """
+        Move nodes either via the selected mobility model, or by legacy drift.
+        Updates both graph.node['pos'] and agent.pos.
+        """
+        if self.mobility is not None:
+            new_positions = self.mobility.step(step)
+            for idx, coord in enumerate(new_positions):
+                self.graph.nodes[idx]["pos"] = coord.tolist()
+                self.agents[idx].pos = coord
+        else:
+            pos = nx.get_node_attributes(self.graph, "pos")
+            dx, dy = self.compute_random_movement(step)
+            new_pos = {i: [pos[i][0] + dx[i], pos[i][1] + dy[i]]
+                       for i in range(self.num_agents)}
+            nx.set_node_attributes(self.graph, new_pos, "pos")
+            for i, p in new_pos.items():
+                self.agents[i].pos = p
 
-        for i in range(self.num_agents):
-            self.agents[i].pos = new_pos[i]
-
-        new_edges = nx.geometric_edges(self.graph, radius=constants.RADIUS_OF_INFLUENCE)
-        old_edges = list(self.graph.edges())
-        self.graph.remove_edges_from(old_edges)
-        self.graph.add_edges_from(new_edges)
+        # rebuild connectivity based on new positions
+        edges = nx.geometric_edges(self.graph, radius=constants.RADIUS_OF_INFLUENCE)
+        self.graph.remove_edges_from(list(self.graph.edges()))
+        self.graph.add_edges_from(edges)
 
     def compute_random_movement(self, step):
         ox = [step * self.movement_np_random.uniform(-1, 1) for _ in range(self.num_agents)]
@@ -384,6 +409,20 @@ class World:
             chosen_source_id = ep_rng.randint(0, self.num_agents)
             interest_density = ep_rng.uniform(0.1, 1.0) if self.fixed_interest_density is None else self.fixed_interest_density
 
+        pos0 = np.array(
+            [self.graph.nodes[i]["pos"] for i in range(self.num_agents)],
+            dtype=np.float32
+        )
+        model = MOBILITY_REGISTRY.get(self.mobility_kind)
+        if model is None:
+            self.mobility = None
+        else:
+            # pass the per-episode RNG so trajectories are reproducible
+            self.mobility = model(
+                rng=self.movement_np_random,
+                pos0=pos0,
+                **self.mobility_params
+            )
 
         self.agents = []
         self.messages_transmitted = 0
